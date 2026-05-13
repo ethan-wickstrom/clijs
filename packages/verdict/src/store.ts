@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { RECORDS_FILE_NAME, STORE_DIR_NAME } from "./constants.js";
+import { normalizeRecord } from "./record.js";
 import type { VerdictRecord } from "./record.js";
 
 const storeDir = (root?: string): string => join(root ?? homedir(), STORE_DIR_NAME);
@@ -20,16 +21,39 @@ export const appendRecord = (record: VerdictRecord, root?: string): void => {
   appendFileSync(recordsPath(root), `${JSON.stringify(record)}\n`);
 };
 
-export const readAllRecords = (root?: string): VerdictRecord[] => {
+export interface ReadResult {
+  records: readonly VerdictRecord[];
+  corruptedLines: number;
+  migratedFromV1: number;
+}
+
+export const readAll = (root?: string): ReadResult => {
   const path = recordsPath(root);
-  if (!existsSync(path)) return [];
+  if (!existsSync(path)) return { records: [], corruptedLines: 0, migratedFromV1: 0 };
   const raw = readFileSync(path, "utf8");
-  if (raw.trim().length === 0) return [];
-  return raw
-    .split(/\r?\n/)
-    .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line) as VerdictRecord);
+  if (raw.trim().length === 0) return { records: [], corruptedLines: 0, migratedFromV1: 0 };
+  const lines = raw.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  const records: VerdictRecord[] = [];
+  let corruptedLines = 0;
+  let migratedFromV1 = 0;
+  for (const line of lines) {
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (typeof parsed !== "object" || parsed === null) {
+        corruptedLines += 1;
+        continue;
+      }
+      const asPartial = parsed as { schemaVersion?: number };
+      if (asPartial.schemaVersion === undefined || asPartial.schemaVersion < 2) migratedFromV1 += 1;
+      records.push(normalizeRecord(parsed));
+    } catch {
+      corruptedLines += 1;
+    }
+  }
+  return { records, corruptedLines, migratedFromV1 };
 };
+
+export const readAllRecords = (root?: string): VerdictRecord[] => [...readAll(root).records];
 
 export const findRecord = (id: string, root?: string): VerdictRecord | undefined =>
   readAllRecords(root).find((record) => record.id === id);

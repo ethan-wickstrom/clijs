@@ -3,9 +3,15 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { stdin, stdout } from "node:process";
 import { summarizeDiff } from "./parse-diff.js";
-import { isVerdictDecision, newRecord } from "./record.js";
-import type { PullRequestContext, VerdictDecision } from "./record.js";
-import { appendRecord, ensureStore, findRecord, readAllRecords } from "./store.js";
+import { defaultProvenance, isAiAssistLevel, isVerdictDecision, newRecord } from "./record.js";
+import type {
+  AiAssistLevel,
+  PullRequestContext,
+  Provenance,
+  ReviewComment,
+  VerdictDecision,
+} from "./record.js";
+import { appendRecord, ensureStore, findRecord, readAll } from "./store.js";
 import { exportRecords } from "./export.js";
 import type { ExportFormat } from "./export.js";
 import { createLineReader } from "./utils/line-reader.js";
@@ -17,6 +23,7 @@ import { red } from "./utils/red.js";
 import { yellow } from "./utils/yellow.js";
 import { supportsColor } from "./utils/supports-color.js";
 import { shortId } from "./utils/short-id.js";
+import { parseCommentArg } from "./utils/parse-comment-arg.js";
 
 interface RecordOptions {
   diffPath: string | null;
@@ -29,6 +36,13 @@ interface RecordOptions {
   decision: VerdictDecision | null;
   reasoning: string | null;
   storeRoot: string | null;
+  headSha: string | null;
+  baseSha: string | null;
+  upstreamLicense: string | null;
+  aiAssisted: AiAssistLevel | null;
+  coDevelopedBy: readonly string[];
+  dcoVerified: boolean;
+  comments: readonly ReviewComment[];
 }
 
 interface ExportOptions {
@@ -50,21 +64,29 @@ const printHelp = (): void => {
       "  verdict export [--format <fmt>]       export the dataset for fine-tuning",
       "  verdict --help                        show this message",
       "",
-      "`record` reads a unified diff from stdin (default) or from --diff <path>,",
-      "then prompts for the verdict, reasoning, and labels.",
+      "`record` reads a unified diff from stdin (default) or from --diff <path>.",
       "",
       "`record` options:",
-      "  --diff <path>          read the diff from a file instead of stdin",
-      "  --repo <owner/name>    repository identifier",
-      "  --pr <number>          pull-request number",
-      "  --title <text>         PR title",
-      "  --author <handle>      PR author handle",
-      "  --description <text>   PR description (or pass --description-stdin)",
-      "  --description-stdin    read description from stdin before the diff",
-      "  --label <name>         add a label (repeatable)",
-      "  --decision <choice>    one of: merge | request-changes | close",
-      "  --reasoning <text>     skip the editor; use this text",
-      "  --store <path>         override the store root (default: $HOME)",
+      "  --diff <path>                read the diff from a file instead of stdin",
+      "  --repo <owner/name>          repository identifier",
+      "  --pr <number>                pull-request number",
+      "  --title <text>               PR title",
+      "  --author <handle>            PR author handle",
+      "  --description <text>         PR description (single line)",
+      "  --label <name>               add a label (repeatable)",
+      "  --decision <choice>          one of: merge | request-changes | close",
+      "  --reasoning <text>           skip the editor; use this text",
+      "  --head <sha>                 head commit SHA",
+      "  --base <sha>                 base commit SHA",
+      "  --license <spdx>             upstream repository licence (SPDX id, e.g. Apache-2.0)",
+      "  --ai-assist <level>          none | partial | majority | unknown (default: unknown)",
+      "  --co-dev-by <handle>         add a Co-developed-by attribution (repeatable)",
+      "  --dco-verified               assert the contributor's DCO sign-off was verified",
+      "  --comment <path:lines:sev:body>",
+      "                                add a per-comment review (repeatable).",
+      "                                lines is `12` or `12-15`; sev in {nit,discuss,",
+      "                                requested-change,block}; body is the analysis.",
+      "  --store <path>               override the store root (default: $HOME)",
       "",
       "`export` options:",
       "  --format <fmt>         one of: jsonl (default) | hf | openai",
@@ -101,9 +123,17 @@ const parseRecordArgs = (argv: readonly string[]): RecordOptions => {
     decision: null,
     reasoning: null,
     storeRoot: null,
+    headSha: null,
+    baseSha: null,
+    upstreamLicense: null,
+    aiAssisted: null,
+    coDevelopedBy: [],
+    dcoVerified: false,
+    comments: [],
   };
   const labels: string[] = [];
-  let descriptionFromStdin = false;
+  const coDev: string[] = [];
+  const comments: ReviewComment[] = [];
   for (let index = 0; index < argv.length; index++) {
     const token = argv[index]!;
     if (token === "--diff") {
@@ -131,8 +161,6 @@ const parseRecordArgs = (argv: readonly string[]): RecordOptions => {
       const parsed = parseFlagValue(argv, index);
       options.description = parsed.value ?? "";
       index = parsed.nextIndex;
-    } else if (token === "--description-stdin") {
-      descriptionFromStdin = true;
     } else if (token === "--label") {
       const parsed = parseFlagValue(argv, index);
       if (parsed.value) labels.push(parsed.value);
@@ -145,6 +173,35 @@ const parseRecordArgs = (argv: readonly string[]): RecordOptions => {
       const parsed = parseFlagValue(argv, index);
       options.reasoning = parsed.value;
       index = parsed.nextIndex;
+    } else if (token === "--head") {
+      const parsed = parseFlagValue(argv, index);
+      options.headSha = parsed.value;
+      index = parsed.nextIndex;
+    } else if (token === "--base") {
+      const parsed = parseFlagValue(argv, index);
+      options.baseSha = parsed.value;
+      index = parsed.nextIndex;
+    } else if (token === "--license") {
+      const parsed = parseFlagValue(argv, index);
+      options.upstreamLicense = parsed.value;
+      index = parsed.nextIndex;
+    } else if (token === "--ai-assist") {
+      const parsed = parseFlagValue(argv, index);
+      if (parsed.value && isAiAssistLevel(parsed.value)) options.aiAssisted = parsed.value;
+      index = parsed.nextIndex;
+    } else if (token === "--co-dev-by") {
+      const parsed = parseFlagValue(argv, index);
+      if (parsed.value) coDev.push(parsed.value);
+      index = parsed.nextIndex;
+    } else if (token === "--dco-verified") {
+      options.dcoVerified = true;
+    } else if (token === "--comment") {
+      const parsed = parseFlagValue(argv, index);
+      if (parsed.value) {
+        const comment = parseCommentArg(parsed.value);
+        if (comment) comments.push(comment);
+      }
+      index = parsed.nextIndex;
     } else if (token === "--store") {
       const parsed = parseFlagValue(argv, index);
       options.storeRoot = parsed.value;
@@ -152,7 +209,8 @@ const parseRecordArgs = (argv: readonly string[]): RecordOptions => {
     }
   }
   options.labels = labels;
-  if (descriptionFromStdin) options.description = "<stdin>";
+  options.coDevelopedBy = coDev;
+  options.comments = comments;
   return options;
 };
 
@@ -208,6 +266,15 @@ const colorForDecision = (decision: VerdictDecision, color: boolean): string => 
   return yellow(decision);
 };
 
+const buildProvenance = (options: RecordOptions): Provenance => {
+  const baseline = defaultProvenance();
+  return {
+    aiAssisted: options.aiAssisted ?? baseline.aiAssisted,
+    coDevelopedBy: options.coDevelopedBy,
+    dcoVerified: options.dcoVerified,
+  };
+};
+
 const cmdInit = (color: boolean, storeRoot: string | null): number => {
   const dir = ensureStore(storeRoot ?? undefined);
   stdout.write(`${color ? bold("initialised:") : "initialised:"} ${dir}\n`);
@@ -258,29 +325,34 @@ const cmdRecord = async (options: RecordOptions, color: boolean): Promise<number
     filesChanged: summary.filesChanged,
     additions: summary.totalAdditions,
     deletions: summary.totalDeletions,
+    headSha: options.headSha,
+    baseSha: options.baseSha,
+    upstreamLicense: options.upstreamLicense,
   };
-  const record = newRecord(
-    shortId(),
-    new Date().toISOString(),
+  const record = newRecord({
+    id: shortId(),
+    recordedAt: new Date().toISOString(),
     context,
     decision,
-    reasoning ?? "",
-    options.labels,
-  );
+    reasoning: reasoning ?? "",
+    labels: options.labels,
+    comments: options.comments,
+    provenance: buildProvenance(options),
+  });
   appendRecord(record, options.storeRoot ?? undefined);
   stdout.write(
-    `${color ? bold("recorded") : "recorded"} ${record.id} · ${colorForDecision(decision, color)} · ${summary.filesChanged.length} file${summary.filesChanged.length === 1 ? "" : "s"} · +${summary.totalAdditions}/-${summary.totalDeletions}\n`,
+    `${color ? bold("recorded") : "recorded"} ${record.id} · ${colorForDecision(decision, color)} · ${summary.filesChanged.length} file${summary.filesChanged.length === 1 ? "" : "s"} · +${summary.totalAdditions}/-${summary.totalDeletions} · ${record.comments.length} comment${record.comments.length === 1 ? "" : "s"}\n`,
   );
   return 0;
 };
 
 const cmdList = (color: boolean, storeRoot: string | null): number => {
-  const records = readAllRecords(storeRoot ?? undefined);
-  if (records.length === 0) {
+  const result = readAll(storeRoot ?? undefined);
+  if (result.records.length === 0) {
     stdout.write(color ? dim("no verdicts recorded yet.\n") : "no verdicts recorded yet.\n");
     return 0;
   }
-  for (const record of records) {
+  for (const record of result.records) {
     const stamp = record.recordedAt.slice(0, 16).replace("T", " ");
     const decision = colorForDecision(record.decision, color);
     const repo = record.context.repo ?? "—";
@@ -288,6 +360,14 @@ const cmdList = (color: boolean, storeRoot: string | null): number => {
     stdout.write(
       `  ${record.id}  ${stamp}  ${decision.padEnd(color ? 28 : 17)}  ${repo} ${pr}  ${record.context.title}\n`,
     );
+  }
+  if (result.migratedFromV1 > 0) {
+    const message = `(${result.migratedFromV1} record${result.migratedFromV1 === 1 ? "" : "s"} normalised from a pre-v2 schema)`;
+    stdout.write(`${color ? dim(message) : message}\n`);
+  }
+  if (result.corruptedLines > 0) {
+    const message = `(${result.corruptedLines} corrupted line${result.corruptedLines === 1 ? "" : "s"} skipped)`;
+    stdout.write(`${color ? red(message) : message}\n`);
   }
   return 0;
 };
@@ -309,16 +389,36 @@ const cmdShow = (id: string | undefined, color: boolean, storeRoot: string | nul
   stdout.write(`title:       ${record.context.title}\n`);
   if (record.context.author) stdout.write(`author:      ${record.context.author}\n`);
   stdout.write(`decision:    ${colorForDecision(record.decision, color)}\n`);
+  if (record.context.headSha) stdout.write(`head:        ${record.context.headSha}\n`);
+  if (record.context.baseSha) stdout.write(`base:        ${record.context.baseSha}\n`);
+  if (record.context.upstreamLicense)
+    stdout.write(`licence:     ${record.context.upstreamLicense}\n`);
   if (record.labels.length > 0) stdout.write(`labels:      ${record.labels.join(", ")}\n`);
   stdout.write(
     `changes:     ${record.context.filesChanged.length} file${record.context.filesChanged.length === 1 ? "" : "s"} · +${record.context.additions}/-${record.context.deletions}\n`,
   );
+  stdout.write(
+    `provenance:  ai-assist=${record.provenance.aiAssisted} dco-verified=${record.provenance.dcoVerified ? "yes" : "no"}\n`,
+  );
+  if (record.provenance.coDevelopedBy.length > 0) {
+    stdout.write(`co-dev-by:   ${record.provenance.coDevelopedBy.join(", ")}\n`);
+  }
+  if (record.comments.length > 0) {
+    stdout.write(`\n${color ? bold("comments") : "comments"}\n`);
+    for (const comment of record.comments) {
+      const lines =
+        comment.lineEnd === null
+          ? `${comment.lineStart}`
+          : `${comment.lineStart}-${comment.lineEnd}`;
+      stdout.write(`  [${comment.severity}] ${comment.filePath}:${lines}\n      ${comment.body}\n`);
+    }
+  }
   stdout.write(`\n${color ? bold("reasoning") : "reasoning"}\n${record.reasoning}\n`);
   return 0;
 };
 
 const cmdExport = (options: ExportOptions, color: boolean): number => {
-  const records = readAllRecords(options.storeRoot ?? undefined);
+  const records = readAll(options.storeRoot ?? undefined).records;
   const output = exportRecords(records, options.format);
   if (options.out) {
     writeFileSync(options.out, output);

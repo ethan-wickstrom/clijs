@@ -7,23 +7,43 @@ const sampleContext: PullRequestContext = {
   source: "stdin",
   repo: "owner/repo",
   prNumber: 42,
-  title: "Fix typo in README",
+  title: "Fix race in cache.ts",
   author: "octocat",
-  description: "Found a typo on line 12.",
-  diff: "--- a/README.md\n+++ b/README.md\n@@ -1,1 +1,1 @@\n-hi\n+hello",
-  filesChanged: [{ path: "README.md", additions: 1, deletions: 1 }],
+  description: "Drops the read lock too early.",
+  diff: "--- a/cache.ts\n+++ b/cache.ts\n@@ -1,1 +1,1 @@\n-hi\n+hello",
+  filesChanged: [{ path: "cache.ts", additions: 1, deletions: 1 }],
   additions: 1,
   deletions: 1,
+  headSha: "abcd1234",
+  baseSha: "00001111",
+  upstreamLicense: "Apache-2.0",
 };
 
-const sampleRecord: VerdictRecord = newRecord(
-  "abc123",
-  "2026-05-13T00:00:00Z",
-  sampleContext,
-  "merge",
-  "Clear, scoped, no side-effects.",
-  ["docs"],
-);
+const sampleRecord: VerdictRecord = newRecord({
+  id: "abc123",
+  recordedAt: "2026-05-13T00:00:00Z",
+  context: sampleContext,
+  decision: "request-changes",
+  reasoning: "Touches three subsystems for one symptom.",
+  labels: ["concurrency", "tests-needed"],
+  comments: [
+    {
+      filePath: "cache.ts",
+      lineStart: 12,
+      lineEnd: 15,
+      severity: "block",
+      body: "The lock is released before the consistent read finishes.",
+    },
+    {
+      filePath: "cache.ts",
+      lineStart: 30,
+      lineEnd: null,
+      severity: "nit",
+      body: "Rename `c` to `cache` for clarity.",
+    },
+  ],
+  provenance: { aiAssisted: "partial", coDevelopedBy: ["alice"], dcoVerified: true },
+});
 
 describe("exportRecords", () => {
   it("returns empty string for no records", () => {
@@ -32,35 +52,48 @@ describe("exportRecords", () => {
     expect(exportRecords([], "openai")).toBe("");
   });
 
-  it("jsonl format preserves the on-disk schema", () => {
+  it("jsonl format preserves the on-disk schema including comments and provenance", () => {
     const output = exportRecords([sampleRecord], "jsonl").trim();
     const parsed = JSON.parse(output) as VerdictRecord;
     expect(parsed.id).toBe("abc123");
-    expect(parsed.decision).toBe("merge");
-    expect(parsed.context.filesChanged[0]?.path).toBe("README.md");
+    expect(parsed.schemaVersion).toBe(2);
+    expect(parsed.comments.length).toBe(2);
+    expect(parsed.comments[0]?.severity).toBe("block");
+    expect(parsed.provenance.aiAssisted).toBe("partial");
+    expect(parsed.provenance.dcoVerified).toBe(true);
+    expect(parsed.context.headSha).toBe("abcd1234");
+    expect(parsed.context.upstreamLicense).toBe("Apache-2.0");
   });
 
-  it("hf format flattens the context for dataset loading", () => {
+  it("hf format includes the new flat fields", () => {
     const output = exportRecords([sampleRecord], "hf").trim();
     const parsed = JSON.parse(output) as Record<string, unknown>;
-    expect(parsed.id).toBe("abc123");
-    expect(parsed.repo).toBe("owner/repo");
-    expect(parsed.pr_number).toBe(42);
-    expect(parsed.decision).toBe("merge");
-    expect(parsed.reasoning).toBe("Clear, scoped, no side-effects.");
-    expect(Array.isArray(parsed.files_changed)).toBe(true);
+    expect(parsed.head_sha).toBe("abcd1234");
+    expect(parsed.upstream_license).toBe("Apache-2.0");
+    expect(parsed.ai_assisted).toBe("partial");
+    expect(parsed.dco_verified).toBe(true);
+    expect(Array.isArray(parsed.comments)).toBe(true);
+    const comments = parsed.comments as { severity: string; body: string }[];
+    expect(comments[0]?.severity).toBe("block");
   });
 
-  it("openai format produces a system/user/assistant chat row", () => {
+  it("openai format includes provenance and comments in the assistant message", () => {
     const output = exportRecords([sampleRecord], "openai").trim();
     const parsed = JSON.parse(output) as { messages: { role: string; content: string }[] };
-    expect(parsed.messages.length).toBe(3);
-    expect(parsed.messages[0]?.role).toBe("system");
-    expect(parsed.messages[1]?.role).toBe("user");
-    expect(parsed.messages[2]?.role).toBe("assistant");
-    expect(parsed.messages[1]?.content).toContain("Title: Fix typo in README");
-    expect(parsed.messages[1]?.content).toContain("Diff:");
-    expect(parsed.messages[2]?.content).toContain("Decision: merge");
-    expect(parsed.messages[2]?.content).toContain("Clear, scoped, no side-effects.");
+    const assistant = parsed.messages.find((message) => message.role === "assistant");
+    expect(assistant?.content).toContain("Decision: request-changes");
+    expect(assistant?.content).toContain("Provenance: ai-assist=partial, dco-verified=yes");
+    expect(assistant?.content).toContain("Co-developed-by: alice");
+    expect(assistant?.content).toContain("[block] cache.ts:12-15");
+    expect(assistant?.content).toContain("[nit] cache.ts:30");
+  });
+
+  it("openai user message exposes head/base/license for context", () => {
+    const output = exportRecords([sampleRecord], "openai").trim();
+    const parsed = JSON.parse(output) as { messages: { role: string; content: string }[] };
+    const user = parsed.messages.find((message) => message.role === "user");
+    expect(user?.content).toContain("Head: abcd1234");
+    expect(user?.content).toContain("Base: 00001111");
+    expect(user?.content).toContain("Upstream licence: Apache-2.0");
   });
 });

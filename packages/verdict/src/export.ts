@@ -1,4 +1,4 @@
-import type { VerdictRecord } from "./record.js";
+import type { ReviewComment, VerdictRecord } from "./record.js";
 
 export type ExportFormat = "jsonl" | "hf" | "openai";
 
@@ -13,9 +13,22 @@ export interface HfDatasetRow {
   files_changed: readonly string[];
   additions: number;
   deletions: number;
+  head_sha: string | null;
+  base_sha: string | null;
+  upstream_license: string | null;
   decision: string;
   reasoning: string;
   labels: readonly string[];
+  comments: readonly {
+    file_path: string;
+    line_start: number;
+    line_end: number | null;
+    severity: string;
+    body: string;
+  }[];
+  ai_assisted: string;
+  co_developed_by: readonly string[];
+  dco_verified: boolean;
 }
 
 export interface OpenAiChatRow {
@@ -33,13 +46,32 @@ const toHfRow = (record: VerdictRecord): HfDatasetRow => ({
   files_changed: record.context.filesChanged.map((file) => file.path),
   additions: record.context.additions,
   deletions: record.context.deletions,
+  head_sha: record.context.headSha,
+  base_sha: record.context.baseSha,
+  upstream_license: record.context.upstreamLicense,
   decision: record.decision,
   reasoning: record.reasoning,
   labels: record.labels,
+  comments: record.comments.map((comment) => ({
+    file_path: comment.filePath,
+    line_start: comment.lineStart,
+    line_end: comment.lineEnd,
+    severity: comment.severity,
+    body: comment.body,
+  })),
+  ai_assisted: record.provenance.aiAssisted,
+  co_developed_by: record.provenance.coDevelopedBy,
+  dco_verified: record.provenance.dcoVerified,
 });
 
 const systemPrompt =
-  "You are an experienced open-source maintainer triaging an incoming pull request. Return your decision (merge, request-changes, close) and concise reasoning.";
+  "You are an experienced open-source maintainer triaging an incoming pull request. Return your decision (merge, request-changes, close), any per-comment feedback with severity, provenance assessment, and concise reasoning.";
+
+const formatComment = (comment: ReviewComment): string => {
+  const lines =
+    comment.lineEnd === null ? `${comment.lineStart}` : `${comment.lineStart}-${comment.lineEnd}`;
+  return `- [${comment.severity}] ${comment.filePath}:${lines}\n  ${comment.body}`;
+};
 
 const toUserPrompt = (record: VerdictRecord): string => {
   const lines: string[] = [];
@@ -47,6 +79,10 @@ const toUserPrompt = (record: VerdictRecord): string => {
   if (record.context.prNumber !== null) lines.push(`PR #${record.context.prNumber}`);
   lines.push(`Title: ${record.context.title}`);
   if (record.context.author) lines.push(`Author: ${record.context.author}`);
+  if (record.context.headSha) lines.push(`Head: ${record.context.headSha}`);
+  if (record.context.baseSha) lines.push(`Base: ${record.context.baseSha}`);
+  if (record.context.upstreamLicense)
+    lines.push(`Upstream licence: ${record.context.upstreamLicense}`);
   if (record.context.description.trim().length > 0) {
     lines.push("");
     lines.push("Description:");
@@ -61,6 +97,17 @@ const toUserPrompt = (record: VerdictRecord): string => {
 const toAssistantResponse = (record: VerdictRecord): string => {
   const parts: string[] = [`Decision: ${record.decision}`];
   if (record.labels.length > 0) parts.push(`Labels: ${record.labels.join(", ")}`);
+  parts.push(
+    `Provenance: ai-assist=${record.provenance.aiAssisted}, dco-verified=${record.provenance.dcoVerified ? "yes" : "no"}`,
+  );
+  if (record.provenance.coDevelopedBy.length > 0) {
+    parts.push(`Co-developed-by: ${record.provenance.coDevelopedBy.join(", ")}`);
+  }
+  if (record.comments.length > 0) {
+    parts.push("");
+    parts.push("Comments:");
+    for (const comment of record.comments) parts.push(formatComment(comment));
+  }
   parts.push("");
   parts.push(record.reasoning.trim());
   return parts.join("\n");
