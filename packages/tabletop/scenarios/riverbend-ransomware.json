@@ -1,0 +1,223 @@
+{
+  "id": "riverbend-ransomware",
+  "title": "Riverbend Community Bank — Ransomware on the Wire-Transfer Workstation",
+  "version": "0.1.0",
+  "summary": "An out-of-hours ransomware exercise for a mid-market US community bank. The exercise covers initial detection, escalation, containment, regulator notification, and recovery decisions over an 8-hour window.",
+  "setting": "You are the on-call SecOps Lead at Riverbend Community Bank, a $1.8B-asset community bank in upstate New York with 12 branches and roughly 220 employees. The bank uses Microsoft 365, a SentinelOne EDR rollout (90% coverage), Splunk Cloud SIEM, and a managed-SOC contract with a regional MSSP. You are subject to NYDFS Cybersecurity Regulation (23 NYCRR 500) and FFIEC IT examination. It is 02:14 on a Tuesday.",
+  "duration_min": 60,
+  "frameworks": {
+    "mitre_attack": ["T1566.001", "T1078.004", "T1486", "T1490", "T1567.002"],
+    "nist_csf": ["DE.AE-2", "DE.CM-7", "RS.RP-1", "RS.CO-2", "RS.AN-1", "RS.MI-2", "RC.RP-1"],
+    "nydfs_500": ["500.16", "500.17(a)", "500.17(b)"]
+  },
+  "facilitator_notes": "Pace: 6 to 10 minutes per scene. Allow disagreement on decisions before recording the chosen option. After-action discussion should focus on decisions where the team split.",
+  "scenes": [
+    {
+      "id": "01-alert",
+      "narrative": "Your PagerDuty fires. The MSSP has flagged a SentinelOne detection on WS-OPS-04, the workstation in the wire-transfer office: 17,000 file modifications in 60 seconds, all writing the extension `.lockbear`. The on-call MSSP analyst has automatically isolated the host. The wire-transfer team starts at 06:30. You have not seen detections like this from this MSSP before.",
+      "decision": {
+        "prompt": "What is your first move?",
+        "options": [
+          {
+            "id": "A",
+            "label": "Acknowledge the page and decide to investigate after the team comes in at 06:30.",
+            "consequence": "By 04:00 the same indicator triggers on three more workstations. You wake up to a much bigger incident.",
+            "score": -15,
+            "techniques_exercised": [],
+            "next": "02-spread"
+          },
+          {
+            "id": "B",
+            "label": "Open Splunk, confirm the detection on WS-OPS-04, and start scoping which other endpoints have touched the same indicator.",
+            "consequence": "You confirm the detection and find one neighbouring workstation talking to the same C2 IP in the last hour. You now have scope.",
+            "score": 15,
+            "techniques_exercised": ["DE.AE-2", "DE.CM-7"],
+            "next": "02-scoped"
+          },
+          {
+            "id": "C",
+            "label": "Tell the MSSP to re-image WS-OPS-04 immediately and go back to sleep.",
+            "consequence": "The MSSP destroys the only forensic evidence. Three hours later another host fires, and the regulator will later ask why you destroyed the artefact.",
+            "score": -10,
+            "techniques_exercised": [],
+            "next": "02-spread"
+          }
+        ]
+      }
+    },
+    {
+      "id": "02-scoped",
+      "narrative": "It is now 02:35. You have one isolated workstation (WS-OPS-04) and one suspicious neighbour (WS-OPS-02). The MSSP analyst is on the bridge. The on-call CISO is sleeping. Wire-transfer cutoff windows open at 06:30; the bank typically clears $40M of wires before 09:00.",
+      "decision": {
+        "prompt": "Who do you call?",
+        "options": [
+          {
+            "id": "A",
+            "label": "Wake the CISO and the COO. Open the Incident Response Plan binder.",
+            "consequence": "The CISO joins the bridge in 12 minutes. She agrees to escalate per the IR Plan and asks you to prepare a draft notification for NYDFS.",
+            "score": 15,
+            "techniques_exercised": ["RS.RP-1", "RS.CO-2"],
+            "next": "03-isolate"
+          },
+          {
+            "id": "B",
+            "label": "Handle it yourself with the MSSP — no need to wake the executives over a single isolated host.",
+            "consequence": "By 04:30 you are running the response solo. The COO finds out from a Slack message at 06:15 and is furious that wire transfers are paused without his knowledge.",
+            "score": -10,
+            "techniques_exercised": [],
+            "next": "03-late"
+          },
+          {
+            "id": "C",
+            "label": "Call the FBI Cyber Division and the FS-ISAC right now.",
+            "consequence": "FS-ISAC takes a report. The FBI agent on duty notes the case but says they cannot meaningfully help in the first hour. You have used 25 minutes you could have spent containing.",
+            "score": 0,
+            "techniques_exercised": ["RS.CO-2"],
+            "next": "03-isolate"
+          }
+        ]
+      }
+    },
+    {
+      "id": "02-spread",
+      "narrative": "By 04:10 SentinelOne has fired on four hosts. One is the file server FS-CORE-01, which holds the loan-origination scans. Wire-transfer staff arrive in 140 minutes. The MSSP escalates to their Tier-3 lead and asks you for authority to take broader action.",
+      "decision": {
+        "prompt": "What authority do you grant?",
+        "options": [
+          {
+            "id": "A",
+            "label": "Authorise containment: isolate every host with the indicator and disable the suspected service account.",
+            "consequence": "Containment holds. You have lost three hours but you have stopped the spread. Wire transfers will be delayed; the COO will need to be told before market open.",
+            "score": 10,
+            "techniques_exercised": ["RS.MI-2", "T1078.004"],
+            "next": "03-isolate"
+          },
+          {
+            "id": "B",
+            "label": "Wait for daylight and the CISO before authorising anything beyond the isolation already done.",
+            "consequence": "By 06:00 the file server is fully encrypted and the actor has staged 8GB of data to a Mega.nz account. This is now a data-exfiltration incident, not just ransomware.",
+            "score": -20,
+            "techniques_exercised": ["T1567.002"],
+            "next": "03-late"
+          }
+        ]
+      }
+    },
+    {
+      "id": "03-isolate",
+      "narrative": "It is 03:30. Containment is in place. The CISO is on the bridge. You have the chosen extension (`.lockbear`), one C2 IP, and a service account (`svc-backup`) that authenticated to four hosts via WinRM in the last 12 hours.",
+      "decision": {
+        "prompt": "Where do you focus the next 60 minutes?",
+        "options": [
+          {
+            "id": "A",
+            "label": "Hunt: pivot on the service account across all auth logs; check whether any backup repositories were touched.",
+            "consequence": "You find that the actor reached the Veeam server at 01:55 but failed to delete backups (MFA on the Veeam admin role held). You can recover.",
+            "score": 15,
+            "techniques_exercised": ["RS.AN-1", "T1490"],
+            "next": "04-comms"
+          },
+          {
+            "id": "B",
+            "label": "Drafting: write the customer-impact statement so it is ready for 06:30.",
+            "consequence": "You have a polished press release at 04:30 but you have not validated whether backups survived. Recovery is now blocked on incomplete information.",
+            "score": -5,
+            "techniques_exercised": [],
+            "next": "04-comms"
+          },
+          {
+            "id": "C",
+            "label": "Pay: explore quietly whether the bank's cyber-insurance broker can negotiate with the actor.",
+            "consequence": "OFAC sanction risk on a known Russian-affiliated group. The CISO vetoes the conversation. You have lost an hour and surfaced a governance problem.",
+            "score": -10,
+            "techniques_exercised": [],
+            "next": "04-comms"
+          }
+        ]
+      }
+    },
+    {
+      "id": "03-late",
+      "narrative": "It is 06:15. Wire-transfer staff are walking in to find the office cordoned off. The COO is calling on the bridge. You still do not have a clean scope. The CISO is now joining and is unhappy.",
+      "decision": {
+        "prompt": "What do you tell the COO?",
+        "options": [
+          {
+            "id": "A",
+            "label": "The truth, structured: scope unclear, wire transfers paused, NYDFS notification will be filed within the 72-hour window, an external IR firm is being engaged now.",
+            "consequence": "The COO is angry but informed. He clears the budget for the IR firm and pauses wires until you give the all-clear.",
+            "score": 5,
+            "techniques_exercised": ["RS.CO-2"],
+            "next": "04-comms"
+          },
+          {
+            "id": "B",
+            "label": "Reassure: tell him this is contained and he should proceed with normal operations.",
+            "consequence": "Wire transfers proceed on a compromised network for 90 minutes. Two ACH batches go through suspicious approval flows. The post-incident review is brutal.",
+            "score": -25,
+            "techniques_exercised": [],
+            "next": "04-comms"
+          }
+        ]
+      }
+    },
+    {
+      "id": "04-comms",
+      "narrative": "By 08:00 the technical situation is stable. Now the regulatory clock is loud. NYDFS requires notification of a cybersecurity event 'as promptly as possible but in no event later than 72 hours' (23 NYCRR 500.17(a)). The bank is also a member of the FS-ISAC.",
+      "decision": {
+        "prompt": "What is your notification posture?",
+        "options": [
+          {
+            "id": "A",
+            "label": "File the NYDFS Section 500.17(a) notification today with the facts you have, even though scope is still being refined. Share IOCs with FS-ISAC.",
+            "consequence": "You file at 14:30. NYDFS acknowledges within an hour. FS-ISAC distributes the IOCs and two member banks reply that they have seen the same C2 IP in the last 24 hours.",
+            "score": 15,
+            "techniques_exercised": ["RS.CO-2", "500.17(a)", "500.17(b)"],
+            "next": "05-recovery"
+          },
+          {
+            "id": "B",
+            "label": "Wait until you have a complete forensic picture before filing. Push to file at hour 71.",
+            "consequence": "You are inside the legal window but the regulator will note the timing. The auditor will ask why a bank with an MSSP and an EDR took 71 hours to file what was knowable at hour 8.",
+            "score": -5,
+            "techniques_exercised": ["500.17(a)"],
+            "next": "05-recovery"
+          }
+        ]
+      }
+    },
+    {
+      "id": "05-recovery",
+      "narrative": "It is now Wednesday 10:00. The IR firm is on site. Backups are intact. The infected hosts are being rebuilt from gold images. Customer-facing services have been degraded for 28 hours.",
+      "decision": {
+        "prompt": "How do you sequence recovery?",
+        "options": [
+          {
+            "id": "A",
+            "label": "Restore the file server from yesterday's backup, validate integrity, then rotate every credential that touched the affected hosts before reopening wire transfers.",
+            "consequence": "Wire transfers reopen Thursday 09:00. Recovery is clean. The post-incident report will note disciplined sequencing as the reason re-infection did not occur.",
+            "score": 15,
+            "techniques_exercised": ["RC.RP-1", "RS.MI-2"],
+            "next": null
+          },
+          {
+            "id": "B",
+            "label": "Restore everything from backup in parallel and reopen wire transfers as soon as the file server is back.",
+            "consequence": "You reopen at 14:00 Wednesday. By 16:30 a re-infection alert fires from a host whose service-account credential was not rotated. You are back at scene 02.",
+            "score": -15,
+            "techniques_exercised": ["RC.RP-1"],
+            "next": null
+          }
+        ]
+      }
+    }
+  ],
+  "rubric": {
+    "max_score": 100,
+    "thresholds": {
+      "exemplary": 70,
+      "competent": 40,
+      "developing": 10
+    }
+  }
+}

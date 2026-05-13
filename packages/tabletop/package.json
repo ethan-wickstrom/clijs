@@ -1,20 +1,23 @@
 {
-  "name": "golf",
+  "name": "tabletop",
   "version": "0.0.1",
-  "description": "A daily code-golf puzzle for your terminal: solve, submit, shrink your bytes.",
+  "description": "AI-driven cybersecurity tabletop exercises for regulated mid-market firms.",
   "keywords": [
     "cli",
-    "code-golf",
-    "game",
-    "puzzle",
-    "terminal"
+    "cybersecurity",
+    "incident-response",
+    "mitre-attack",
+    "nist",
+    "tabletop",
+    "training"
   ],
   "license": "MIT",
   "bin": {
-    "golf": "./dist/cli.mjs"
+    "tabletop": "./dist/cli.mjs"
   },
   "files": [
     "dist",
+    "scenarios",
     "README.md"
   ],
   "type": "module",
