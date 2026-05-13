@@ -1,17 +1,17 @@
 {
-  "name": "glyph",
+  "name": "golf",
   "version": "0.0.1",
-  "description": "A daily 5-letter terminal puzzle for people who live in their shell.",
+  "description": "A daily code-golf puzzle for your terminal: solve, submit, shrink your bytes.",
   "keywords": [
     "cli",
+    "code-golf",
     "game",
     "puzzle",
-    "terminal",
-    "wordle"
+    "terminal"
   ],
   "license": "MIT",
   "bin": {
-    "glyph": "./dist/cli.mjs"
+    "golf": "./dist/cli.mjs"
   },
   "files": [
     "dist",
