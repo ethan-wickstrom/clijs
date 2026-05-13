@@ -1,0 +1,41 @@
+{
+  "name": "glyph",
+  "version": "0.0.1",
+  "description": "A daily 5-letter terminal puzzle for people who live in their shell.",
+  "keywords": [
+    "cli",
+    "game",
+    "puzzle",
+    "terminal",
+    "wordle"
+  ],
+  "license": "MIT",
+  "bin": {
+    "glyph": "./dist/cli.mjs"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "dev": "vp pack --watch",
+    "test": "vp test run",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
