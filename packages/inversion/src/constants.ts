@@ -4,3 +4,5 @@ export const SOLVE_THRESHOLD = 0.6;
 export const STORE_DIR_NAME = ".inversion";
 export const STORE_FILE_NAME = "play.json";
 export const RUNNER_TIMEOUT_MS = 60_000;
+export const RUNNER_SYSTEM_PROMPT =
+  "You are a helpful assistant. Reply concisely with no preamble.";

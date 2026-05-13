@@ -1,10 +1,13 @@
 import { spawn } from "node:child_process";
-import { RUNNER_TIMEOUT_MS } from "./constants.js";
+import { tmpdir } from "node:os";
+import { RUNNER_SYSTEM_PROMPT, RUNNER_TIMEOUT_MS } from "./constants.js";
 
 export interface RunOptions {
   command?: string;
   model?: string;
   timeoutMs?: number;
+  systemPrompt?: string;
+  cwd?: string;
 }
 
 export interface RunResult {
@@ -29,9 +32,25 @@ export const runClaude = (prompt: string, options: RunOptions = {}): Promise<Run
     const model = options.model ?? "sonnet";
     const timeoutMs = options.timeoutMs ?? RUNNER_TIMEOUT_MS;
     const startedAt = Date.now();
-    const child = spawn(command, ["--print", "--model", model], {
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const systemPrompt = options.systemPrompt ?? RUNNER_SYSTEM_PROMPT;
+    const cwd = options.cwd ?? tmpdir();
+    const child = spawn(
+      command,
+      [
+        "--print",
+        "--model",
+        model,
+        "--tools",
+        "",
+        "--system-prompt",
+        systemPrompt,
+        "--no-session-persistence",
+      ],
+      {
+        stdio: ["pipe", "pipe", "pipe"],
+        cwd,
+      },
+    );
     let stdout = "";
     let stderr = "";
     const killer = setTimeout(() => {

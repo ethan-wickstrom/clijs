@@ -5,10 +5,11 @@ A Wordle-shaped game where the LLM is the objective function: you see the
 same model. Similarity between the two outputs is your score.
 
 ```sh
-inversion play           # today's puzzle (one per UTC day)
-inversion practice <id>  # any past puzzle, doesn't affect streak
-inversion stats          # streak + win rate
-inversion list           # show bundled puzzles
+inversion play              # today's puzzle (one per UTC day)
+inversion practice <id>     # any past puzzle, doesn't affect streak
+inversion stats             # streak + win rate
+inversion list              # show bundled + user-seeded puzzles
+inversion seed --prompt "…" # author a new puzzle from a live claude call
 inversion --help
 ```
 
@@ -58,18 +59,35 @@ neighbourhood — is the same skill they already practise every working day.
 
 ## How scoring works
 
-The scorer is **Jaccard token similarity** between (a) the cached original
-output and (b) the live output produced by running your guess against the
-same model. Tokens: lowercased, punctuation-stripped, apostrophes kept,
-unicode-aware.
+The scorer is a **50/50 blend of token-level Jaccard and character-3-gram
+cosine** between (a) the cached original output and (b) the live output
+produced by running your guess against the same model. Both metrics share
+the same normalisation: lowercased, punctuation-stripped, apostrophes
+kept, unicode-aware. The char-n-gram half catches inflectional and
+surface-form variants that pure Jaccard misses (`steams ≈ steam`).
 
 - `≥ 0.60` → **convergent** — you solved it.
 - `0.40 – 0.59` → **warm** — same neighbourhood, wrong shade.
 - `0.20 – 0.39` → **tepid** — adjacent topic, wrong format.
 - `< 0.20` → **cold** — different territory entirely.
 
-The scorer ignores stylistic divergence and credits semantic + structural
-overlap. It is deterministic given the two outputs.
+The blend is deterministic given the two outputs. The LLM call itself
+is not — so the same guess can score slightly differently across runs.
+That variance is the point of the game: there are many prompts that
+land in the right neighbourhood, not one.
+
+## The share grid
+
+On every completed playthrough, `inversion` emits a Wordle-style share
+string that reveals nothing about the original prompt:
+
+```
+inversion · sat-haiku · 2026-05-13 · 4/6
+⬛⬛🟧🟨🟩
+```
+
+🟩 convergent, 🟨 warm, 🟧 tepid, ⬛ cold. The id and date are public; the
+prompt and outputs are not. Copy-paste anywhere.
 
 ## Requirements
 
@@ -103,12 +121,32 @@ they ship only when L1 produces engagement worth scaling.
 ## Programmatic API
 
 ```ts
-import { dailyPick, PUZZLES, runClaude, describe } from "inversion";
+import {
+  BUNDLED_PUZZLES,
+  dailyPick,
+  describe,
+  formatShareGrid,
+  loadAllPuzzles,
+  runClaude,
+  writeUserPuzzle,
+} from "inversion";
 
-const pick = dailyPick(PUZZLES);
+// today's puzzle, merging bundled and any user-seeded puzzles
+const { puzzles } = loadAllPuzzles();
+const pick = dailyPick(puzzles);
+
+// a single guess
 const { output } = await runClaude("a guess at the prompt");
 const feedback = describe(output, pick!.puzzle.output);
 console.log(feedback.similarity, feedback.bucket);
+
+// author a puzzle programmatically (live claude call done separately)
+const seeded = writeUserPuzzle({
+  id: "my-puzzle",
+  prompt: "Write a limerick about debugging.",
+  output: "There once was a coder named Sue...",
+  model: "claude-sonnet",
+});
 ```
 
 ## License

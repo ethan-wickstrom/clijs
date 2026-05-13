@@ -6,11 +6,12 @@ import {
   completeSession,
   dailyPick,
   findCompleted,
+  formatShareGrid,
   hasCompleted,
   recordGuess,
   startSession,
 } from "./play.js";
-import type { Guess, Puzzle, PuzzleSession } from "./play.js";
+import type { CompletedPuzzle, Guess, Puzzle, PuzzleSession } from "./play.js";
 import { describe } from "./scorer.js";
 import { runClaude, RunnerError } from "./runner.js";
 import { loadPlayState, savePlayState } from "./store.js";
@@ -151,7 +152,13 @@ const handleAlreadyCompleted = (
   stdout.write(
     `${color ? dim("the original prompt was:") : "the original prompt was:"} ${puzzle.prompt}\n`,
   );
+  emitShareGrid(puzzle, completed, color);
   return 0;
+};
+
+const emitShareGrid = (puzzle: Puzzle, completed: CompletedPuzzle, color: boolean): void => {
+  const grid = formatShareGrid(puzzle, completed);
+  stdout.write(`\n${color ? dim("share:") : "share:"}\n${grid}\n`);
 };
 
 const playSession = async (
@@ -248,6 +255,15 @@ const finishSession = (
   stdout.write(
     `${color ? dim("the original prompt was:") : "the original prompt was:"} ${puzzle.prompt}\n`,
   );
+  const completed: CompletedPuzzle = {
+    puzzleId: puzzle.id,
+    isoDate: puzzle.isoDate,
+    completedAtIso: new Date().toISOString(),
+    guesses: session.guesses,
+    solved,
+    guessCount: session.guesses.length,
+  };
+  emitShareGrid(puzzle, completed, color);
   if (recordResult) {
     const state = loadPlayState(storeRoot ?? undefined);
     const next = completeSession(state, puzzle, session);

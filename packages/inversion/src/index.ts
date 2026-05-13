@@ -6,6 +6,7 @@ export {
   startSession,
   recordGuess,
   completeSession,
+  formatShareGrid,
 } from "./play.js";
 export type {
   Puzzle,

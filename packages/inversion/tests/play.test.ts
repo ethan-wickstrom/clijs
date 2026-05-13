@@ -4,11 +4,12 @@ import {
   dailyPick,
   emptyPlayState,
   findCompleted,
+  formatShareGrid,
   hasCompleted,
   recordGuess,
   startSession,
 } from "../src/play.js";
-import type { Guess, Puzzle } from "../src/play.js";
+import type { CompletedPuzzle, Guess, Puzzle } from "../src/play.js";
 import { MAX_GUESSES, SOLVE_THRESHOLD } from "../src/constants.js";
 
 const makePuzzle = (id: string, isoDate: string): Puzzle => ({
@@ -144,5 +145,47 @@ describe("hasCompleted / findCompleted", () => {
     );
     expect(hasCompleted(state, "p")).toBe(true);
     expect(findCompleted(state, "p")?.solved).toBe(true);
+  });
+});
+
+describe("formatShareGrid", () => {
+  const puzzle = makePuzzle("haiku-test", "2026-05-13");
+  const completed = (similarities: readonly number[], solved: boolean): CompletedPuzzle => ({
+    puzzleId: puzzle.id,
+    isoDate: puzzle.isoDate,
+    completedAtIso: "2026-05-13T00:00:00.000Z",
+    guesses: similarities.map((similarity) => ({
+      guessText: "",
+      resultingOutput: "",
+      similarity,
+    })),
+    solved,
+    guessCount: similarities.length,
+  });
+
+  it("emits a header with id + date + solved score", () => {
+    const grid = formatShareGrid(puzzle, completed([0.9], true));
+    expect(grid).toContain(`inversion · ${puzzle.id} · 2026-05-13 · 1/${MAX_GUESSES}`);
+  });
+
+  it("emits X/N for an unsolved playthrough", () => {
+    const grid = formatShareGrid(puzzle, completed([0.05, 0.05, 0.05, 0.05, 0.05, 0.05], false));
+    expect(grid).toContain(`X/${MAX_GUESSES}`);
+  });
+
+  it("maps similarity buckets to the right emoji", () => {
+    const grid = formatShareGrid(puzzle, completed([0.05, 0.25, 0.45, 0.85], true));
+    expect(grid).toContain("⬛🟧🟨🟩");
+  });
+
+  it("emits a one-cell grid for a one-guess solve", () => {
+    const grid = formatShareGrid(puzzle, completed([0.8], true));
+    expect(grid.split("\n")[1]).toBe("🟩");
+  });
+
+  it("does not leak the original prompt", () => {
+    const grid = formatShareGrid(puzzle, completed([0.05, 0.5, 0.8], true));
+    expect(grid).not.toContain(puzzle.prompt);
+    expect(grid).not.toContain(puzzle.output);
   });
 });

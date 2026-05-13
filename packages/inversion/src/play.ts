@@ -65,6 +65,31 @@ export const hasCompleted = (state: PlayState, puzzleId: string): boolean =>
 export const findCompleted = (state: PlayState, puzzleId: string): CompletedPuzzle | undefined =>
   state.completed.find((entry) => entry.puzzleId === puzzleId);
 
+const SHARE_EMOJI = {
+  convergent: "🟩",
+  warm: "🟨",
+  tepid: "🟧",
+  cold: "⬛",
+} as const;
+
+const bucketForSimilarity = (similarity: number): keyof typeof SHARE_EMOJI =>
+  similarity >= 0.6
+    ? "convergent"
+    : similarity >= 0.4
+      ? "warm"
+      : similarity >= 0.2
+        ? "tepid"
+        : "cold";
+
+export const formatShareGrid = (puzzle: Puzzle, completed: CompletedPuzzle): string => {
+  const score = completed.solved ? `${completed.guessCount}/${MAX_GUESSES}` : `X/${MAX_GUESSES}`;
+  const header = `inversion · ${puzzle.id} · ${puzzle.isoDate} · ${score}`;
+  const cells = completed.guesses
+    .map((guess) => SHARE_EMOJI[bucketForSimilarity(guess.similarity)])
+    .join("");
+  return cells.length === 0 ? header : `${header}\n${cells}`;
+};
+
 export const startSession = (puzzle: Puzzle): PuzzleSession => ({
   puzzleId: puzzle.id,
   startedAtIso: new Date().toISOString(),
