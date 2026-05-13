@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vite-plus/test";
 import {
-  blendedSimilarity,
-  charNgramSimilarity,
+  chrfSimilarity,
   describe as describeOutput,
+  diffOutputs,
   jaccardSimilarity,
   tokenize,
 } from "../src/scorer.js";
@@ -60,55 +60,85 @@ describe("jaccardSimilarity", () => {
   });
 });
 
-describe("charNgramSimilarity", () => {
+describe("chrfSimilarity (Popović 2015, β=2)", () => {
   it("returns 1 for identical text", () => {
-    expect(charNgramSimilarity("hello world", "hello world")).toBe(1);
+    expect(chrfSimilarity("hello world", "hello world")).toBe(1);
   });
 
   it("returns 1 for both empty", () => {
-    expect(charNgramSimilarity("", "")).toBe(1);
+    expect(chrfSimilarity("", "")).toBe(1);
   });
 
   it("returns 0 when one side is empty", () => {
-    expect(charNgramSimilarity("", "hello")).toBe(0);
-    expect(charNgramSimilarity("hello", "")).toBe(0);
+    expect(chrfSimilarity("", "hello")).toBe(0);
+    expect(chrfSimilarity("hello", "")).toBe(0);
   });
 
-  it("is symmetric", () => {
-    const a = "a quick brown fox";
-    const b = "the brown fox jumps";
-    expect(charNgramSimilarity(a, b)).toBe(charNgramSimilarity(b, a));
+  it("is asymmetric under β=2 (recall-weighted; hypothesis-vs-reference order matters)", () => {
+    const player = "a quick brown fox";
+    const target = "the brown fox jumps over the lazy dog";
+    expect(chrfSimilarity(player, target)).not.toBe(chrfSimilarity(target, player));
   });
 
   it("scores inflectional variants high (steams ≈ steam)", () => {
-    expect(charNgramSimilarity("the coffee steams", "the coffee steam")).toBeGreaterThan(0.7);
+    expect(chrfSimilarity("the coffee steams", "the coffee steam")).toBeGreaterThan(0.7);
   });
 
   it("scores unrelated text low", () => {
-    expect(charNgramSimilarity("zebra crossing", "punctuation marks")).toBeLessThan(0.3);
+    expect(chrfSimilarity("zebra crossing", "punctuation marks")).toBeLessThan(0.3);
   });
 
-  it("ignores case + punctuation (same normalization as tokens)", () => {
-    expect(charNgramSimilarity("Coffee, steam.", "coffee steam")).toBe(1);
-  });
-});
-
-describe("blendedSimilarity", () => {
-  it("returns 1 for identical text", () => {
-    expect(blendedSimilarity("hello world", "hello world")).toBe(1);
-  });
-
-  it("returns 0 for fully disjoint vocabulary AND surface form", () => {
-    expect(blendedSimilarity("zzzzz", "qqqqq")).toBe(0);
+  it("ignores case + punctuation (same normalisation as tokens)", () => {
+    expect(chrfSimilarity("Coffee, steam.", "coffee steam")).toBe(1);
   });
 
   it("scores thematic-but-lexically-divergent prose noticeably higher than pure Jaccard would", () => {
     const a = "Sleep past the alarm,\nCoffee steams in golden light—\nNowhere else to be.";
     const b = "Sunlight finds the cup,\nsteam curls through unhurried air—\nnowhere yet to be.";
     const jaccard = jaccardSimilarity(a, b);
-    const blended = blendedSimilarity(a, b);
-    expect(blended).toBeGreaterThan(jaccard);
-    expect(blended).toBeGreaterThan(0.25);
+    const chrf = chrfSimilarity(a, b);
+    expect(chrf).toBeGreaterThan(jaccard);
+  });
+});
+
+describe("diffOutputs", () => {
+  it("returns empty arrays for both empty inputs", () => {
+    expect(diffOutputs("", "")).toEqual({ shared: [], onlyInTarget: [], onlyInPlayer: [] });
+  });
+
+  it("returns full target tokens as onlyInTarget when player is empty", () => {
+    const diff = diffOutputs("", "hello world");
+    expect(diff.shared).toEqual([]);
+    expect(diff.onlyInPlayer).toEqual([]);
+    expect(diff.onlyInTarget).toEqual(["hello", "world"]);
+  });
+
+  it("returns full player tokens as onlyInPlayer when target is empty", () => {
+    const diff = diffOutputs("hello world", "");
+    expect(diff.shared).toEqual([]);
+    expect(diff.onlyInTarget).toEqual([]);
+    expect(diff.onlyInPlayer).toEqual(["hello", "world"]);
+  });
+
+  it("partitions tokens into shared / onlyInTarget / onlyInPlayer", () => {
+    const diff = diffOutputs("the cat sat", "the dog ran");
+    expect(diff.shared).toEqual(["the"]);
+    expect(diff.onlyInTarget).toEqual(["dog", "ran"]);
+    expect(diff.onlyInPlayer).toEqual(["cat", "sat"]);
+  });
+
+  it("dedupes within each side and preserves first-occurrence order", () => {
+    const diff = diffOutputs("apple apple banana", "apple banana banana cherry");
+    expect(diff.shared).toEqual(["apple", "banana"]);
+    expect(diff.onlyInTarget).toEqual(["cherry"]);
+    expect(diff.onlyInPlayer).toEqual([]);
+  });
+
+  it("ignores case and punctuation (same normalisation as tokenize)", () => {
+    const diff = diffOutputs("Coffee, steam.", "coffee steam");
+    expect(diff.shared).toEqual(["coffee", "steam"]);
+    expect(diff.onlyInTarget).toEqual([]);
+    expect(diff.onlyInPlayer).toEqual([]);
   });
 });
 

@@ -1,7 +1,7 @@
 const TOKEN_NON_WORD = /[^\p{L}\p{N}\s']/gu;
 const TOKEN_WHITESPACE = /\s+/;
-const CHAR_NGRAM_N = 3;
-const BLEND_TOKEN_WEIGHT = 0.5;
+const CHRF_MAX_N = 6;
+const CHRF_BETA = 2;
 
 const normalize = (text: string): string => text.toLowerCase().replace(TOKEN_NON_WORD, " ");
 
@@ -21,40 +21,95 @@ export const jaccardSimilarity = (a: string, b: string): number => {
   return union === 0 ? 0 : intersection / union;
 };
 
-const charNgramCounts = (text: string): Map<string, number> => {
+const charNgramCounts = (text: string, n: number): Map<string, number> => {
   const collapsed = normalize(text).replace(TOKEN_WHITESPACE, " ").trim();
   const counts = new Map<string, number>();
   if (collapsed.length === 0) return counts;
   const padded = ` ${collapsed} `;
-  if (padded.length < CHAR_NGRAM_N) return counts;
-  for (let index = 0; index <= padded.length - CHAR_NGRAM_N; index++) {
-    const gram = padded.slice(index, index + CHAR_NGRAM_N);
+  if (padded.length < n) return counts;
+  for (let index = 0; index <= padded.length - n; index++) {
+    const gram = padded.slice(index, index + n);
     counts.set(gram, (counts.get(gram) ?? 0) + 1);
   }
   return counts;
 };
 
-const cosineOfCounts = (a: Map<string, number>, b: Map<string, number>): number => {
-  if (a.size === 0 && b.size === 0) return 1;
-  if (a.size === 0 || b.size === 0) return 0;
-  let dot = 0;
-  for (const [key, valueA] of a) {
-    const valueB = b.get(key);
-    if (valueB !== undefined) dot += valueA * valueB;
-  }
-  let sumSqA = 0;
-  for (const value of a.values()) sumSqA += value * value;
-  let sumSqB = 0;
-  for (const value of b.values()) sumSqB += value * value;
-  return dot / Math.sqrt(sumSqA * sumSqB);
+const totalCount = (counts: Map<string, number>): number => {
+  let total = 0;
+  for (const value of counts.values()) total += value;
+  return total;
 };
 
-export const charNgramSimilarity = (a: string, b: string): number =>
-  cosineOfCounts(charNgramCounts(a), charNgramCounts(b));
+const matchedCount = (a: Map<string, number>, b: Map<string, number>): number => {
+  let matched = 0;
+  for (const [key, valueA] of a) {
+    const valueB = b.get(key);
+    if (valueB !== undefined) matched += Math.min(valueA, valueB);
+  }
+  return matched;
+};
 
-export const blendedSimilarity = (a: string, b: string): number =>
-  BLEND_TOKEN_WEIGHT * jaccardSimilarity(a, b) +
-  (1 - BLEND_TOKEN_WEIGHT) * charNgramSimilarity(a, b);
+const fBeta = (matched: number, totalPlayer: number, totalTarget: number, beta: number): number => {
+  if (totalPlayer === 0 && totalTarget === 0) return 1;
+  if (totalPlayer === 0 || totalTarget === 0) return 0;
+  if (matched === 0) return 0;
+  const precision = matched / totalPlayer;
+  const recall = matched / totalTarget;
+  const beta2 = beta * beta;
+  return ((1 + beta2) * precision * recall) / (beta2 * precision + recall);
+};
+
+export const chrfSimilarity = (player: string, target: string): number => {
+  if (player.trim().length === 0 && target.trim().length === 0) return 1;
+  let sum = 0;
+  let count = 0;
+  for (let n = 1; n <= CHRF_MAX_N; n++) {
+    const playerGrams = charNgramCounts(player, n);
+    const targetGrams = charNgramCounts(target, n);
+    const matched = matchedCount(playerGrams, targetGrams);
+    sum += fBeta(matched, totalCount(playerGrams), totalCount(targetGrams), CHRF_BETA);
+    count += 1;
+  }
+  return count === 0 ? 0 : sum / count;
+};
+
+export interface OutputDiff {
+  shared: readonly string[];
+  onlyInTarget: readonly string[];
+  onlyInPlayer: readonly string[];
+}
+
+export const diffOutputs = (playerOutput: string, targetOutput: string): OutputDiff => {
+  const playerOrder = tokenize(playerOutput);
+  const targetOrder = tokenize(targetOutput);
+  const playerSet = new Set(playerOrder);
+  const targetSet = new Set(targetOrder);
+  const seen = new Set<string>();
+  const shared: string[] = [];
+  for (const token of targetOrder) {
+    if (playerSet.has(token) && !seen.has(token)) {
+      shared.push(token);
+      seen.add(token);
+    }
+  }
+  const onlyInTarget: string[] = [];
+  const seenTarget = new Set<string>();
+  for (const token of targetOrder) {
+    if (!playerSet.has(token) && !seenTarget.has(token)) {
+      onlyInTarget.push(token);
+      seenTarget.add(token);
+    }
+  }
+  const onlyInPlayer: string[] = [];
+  const seenPlayer = new Set<string>();
+  for (const token of playerOrder) {
+    if (!targetSet.has(token) && !seenPlayer.has(token)) {
+      onlyInPlayer.push(token);
+      seenPlayer.add(token);
+    }
+  }
+  return { shared, onlyInTarget, onlyInPlayer };
+};
 
 export interface SimilarityFeedback {
   similarity: number;
@@ -63,7 +118,7 @@ export interface SimilarityFeedback {
 }
 
 export const describe = (playerOutput: string, originalOutput: string): SimilarityFeedback => {
-  const similarity = blendedSimilarity(playerOutput, originalOutput);
+  const similarity = chrfSimilarity(playerOutput, originalOutput);
   const bucket: SimilarityFeedback["bucket"] =
     similarity >= 0.6
       ? "convergent"

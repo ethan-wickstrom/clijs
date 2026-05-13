@@ -4,12 +4,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   BUNDLED_PUZZLES,
+  TUTORIAL_PUZZLE,
   UserPuzzleCollisionError,
   findPuzzle,
   loadAllPuzzles,
   slugify,
   writeUserPuzzle,
 } from "../src/puzzles.js";
+
+describe("tutorial puzzle", () => {
+  it("is not in BUNDLED_PUZZLES (the daily rotation must not include it)", () => {
+    expect(BUNDLED_PUZZLES.some((puzzle) => puzzle.id === TUTORIAL_PUZZLE.id)).toBe(false);
+  });
+
+  it("has non-empty prompt + output + model", () => {
+    expect(TUTORIAL_PUZZLE.prompt.length).toBeGreaterThan(0);
+    expect(TUTORIAL_PUZZLE.output.length).toBeGreaterThan(0);
+    expect(TUTORIAL_PUZZLE.model.length).toBeGreaterThan(0);
+  });
+});
 
 describe("bundled puzzles", () => {
   it("has at least one puzzle", () => {

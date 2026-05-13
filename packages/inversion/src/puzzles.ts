@@ -7,6 +7,14 @@ import type { Puzzle } from "./play.js";
 const PUZZLE_DIR_NAME = "puzzles";
 const MODEL = "claude-sonnet";
 
+export const TUTORIAL_PUZZLE: Puzzle = {
+  id: "tutorial",
+  isoDate: "2026-05-13",
+  model: MODEL,
+  prompt: "Name three fruits, comma-separated, no extra text.",
+  output: "Apple, Banana, Mango",
+};
+
 export const BUNDLED_PUZZLES: readonly Puzzle[] = [
   {
     id: "sat-haiku",

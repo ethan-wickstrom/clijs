@@ -17,19 +17,14 @@ export type {
   PlayState,
   DailyPick,
 } from "./play.js";
-export {
-  tokenize,
-  jaccardSimilarity,
-  charNgramSimilarity,
-  blendedSimilarity,
-  describe,
-} from "./scorer.js";
-export type { SimilarityFeedback } from "./scorer.js";
+export { tokenize, jaccardSimilarity, chrfSimilarity, diffOutputs, describe } from "./scorer.js";
+export type { OutputDiff, SimilarityFeedback } from "./scorer.js";
 export { runClaude, RunnerError } from "./runner.js";
 export type { RunOptions, RunResult } from "./runner.js";
 export { loadPlayState, savePlayState } from "./store.js";
 export {
   BUNDLED_PUZZLES,
+  TUTORIAL_PUZZLE,
   loadAllPuzzles,
   loadUserPuzzles,
   findPuzzle,

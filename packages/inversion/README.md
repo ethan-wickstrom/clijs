@@ -5,6 +5,7 @@ A Wordle-shaped game where the LLM is the objective function: you see the
 same model. Similarity between the two outputs is your score.
 
 ```sh
+inversion tutorial          # one practice round with an intro (no streak)
 inversion play              # today's puzzle (one per UTC day)
 inversion practice <id>     # any past puzzle, doesn't affect streak
 inversion stats             # streak + win rate
@@ -59,22 +60,48 @@ neighbourhood — is the same skill they already practise every working day.
 
 ## How scoring works
 
-The scorer is a **50/50 blend of token-level Jaccard and character-3-gram
-cosine** between (a) the cached original output and (b) the live output
-produced by running your guess against the same model. Both metrics share
-the same normalisation: lowercased, punctuation-stripped, apostrophes
-kept, unicode-aware. The char-n-gram half catches inflectional and
-surface-form variants that pure Jaccard misses (`steams ≈ steam`).
+The scorer is **chrF** (Popović, WMT 2015) with `β=2` — a recall-weighted
+multi-n character-n-gram F-score, the canonical lightweight metric for
+short-text similarity without embeddings. n ranges 1 through 6. The
+β-weighting rewards a player whose output covers the target's content
+even if they produce extra material, which matches the "many prompts
+land here" spirit of the game.
 
 - `≥ 0.60` → **convergent** — you solved it.
 - `0.40 – 0.59` → **warm** — same neighbourhood, wrong shade.
 - `0.20 – 0.39` → **tepid** — adjacent topic, wrong format.
 - `< 0.20` → **cold** — different territory entirely.
 
-The blend is deterministic given the two outputs. The LLM call itself
-is not — so the same guess can score slightly differently across runs.
+chrF is deterministic given the two outputs. The LLM call itself is
+not — so the same guess can score slightly differently across runs.
 That variance is the point of the game: there are many prompts that
 land in the right neighbourhood, not one.
+
+## Per-guess feedback
+
+After every guess, in addition to the similarity score, you see a token
+diff:
+
+```
+  their output:
+    Sunlight finds the cup, steam curls through unhurried air,
+    nowhere yet to be.
+
+  ✓ shared: nowhere, steam
+  + missed: sleep, alarm, coffee, golden, light, else
+  − extra:  sunlight, finds, cup, curls, unhurried, air, yet
+  similarity: 47%  warm  (match)
+```
+
+- `✓ shared` — tokens both outputs produced. These confirm what you
+  got right.
+- `+ missed` — tokens the target produced that yours didn't. These tell
+  you what to aim for next.
+- `− extra` — tokens yours produced that the target didn't. These tell
+  you what to drop.
+
+Common function words (the, a, of, …) are filtered from display only;
+they still count toward the score. Lists are capped at 10 tokens.
 
 ## The share grid
 
@@ -123,8 +150,10 @@ they ship only when L1 produces engagement worth scaling.
 ```ts
 import {
   BUNDLED_PUZZLES,
+  chrfSimilarity,
   dailyPick,
   describe,
+  diffOutputs,
   formatShareGrid,
   loadAllPuzzles,
   runClaude,
@@ -139,6 +168,10 @@ const pick = dailyPick(puzzles);
 const { output } = await runClaude("a guess at the prompt");
 const feedback = describe(output, pick!.puzzle.output);
 console.log(feedback.similarity, feedback.bucket);
+
+// raw metric + token diff
+const raw = chrfSimilarity(output, pick!.puzzle.output);
+const { shared, onlyInTarget, onlyInPlayer } = diffOutputs(output, pick!.puzzle.output);
 
 // author a puzzle programmatically (live claude call done separately)
 const seeded = writeUserPuzzle({

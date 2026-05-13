@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { stdin, stdout } from "node:process";
-import { MAX_GUESSES, SOLVE_THRESHOLD } from "./constants.js";
+import { DIFF_DISPLAY_CAP, MAX_GUESSES, SOLVE_THRESHOLD, STOP_WORDS } from "./constants.js";
 import {
   completeSession,
   dailyPick,
@@ -12,10 +12,11 @@ import {
   startSession,
 } from "./play.js";
 import type { CompletedPuzzle, Guess, Puzzle, PuzzleSession } from "./play.js";
-import { describe } from "./scorer.js";
+import { describe, diffOutputs } from "./scorer.js";
 import { runClaude, RunnerError } from "./runner.js";
 import { loadPlayState, savePlayState } from "./store.js";
 import {
+  TUTORIAL_PUZZLE,
   UserPuzzleCollisionError,
   findPuzzle,
   loadAllPuzzles,
@@ -31,7 +32,7 @@ import { yellow } from "./utils/yellow.js";
 import { cyan } from "./utils/cyan.js";
 import { supportsColor } from "./utils/supports-color.js";
 
-type Command = "play" | "practice" | "stats" | "list" | "seed" | "help";
+type Command = "play" | "practice" | "stats" | "list" | "seed" | "tutorial" | "help";
 
 interface ParsedArgs {
   command: Command;
@@ -60,6 +61,7 @@ const parseArgs = (argv: readonly string[]): ParsedArgs => {
   } else if (first === "stats") args.command = "stats";
   else if (first === "list") args.command = "list";
   else if (first === "seed") args.command = "seed";
+  else if (first === "tutorial") args.command = "tutorial";
   for (let index = 0; index < rest.length; index++) {
     const token = rest[index]!;
     if (token === "--store") args.storeRoot = rest[++index] ?? null;
@@ -78,6 +80,7 @@ const printHelp = (color: boolean): void => {
         : "inversion — guess the prompt from the LLM output",
       "",
       "Usage:",
+      "  inversion tutorial          walk through one practice round (no streak)",
       "  inversion play              play today's puzzle",
       "  inversion practice <id>     play a past puzzle (does not affect streak)",
       "  inversion stats             show your streak and history",
@@ -99,8 +102,8 @@ const printHelp = (color: boolean): void => {
       "",
       "How scoring works:",
       `  Each guess: your prompt is run live against claude. The output is`,
-      `  compared to the original output via a blended Jaccard-token + char-ngram`,
-      `  cosine metric. Hit ≥ ${SOLVE_THRESHOLD} to solve. You get ${MAX_GUESSES} guesses.`,
+      `  compared to the original output via chrF (Popović 2015) with β=2.`,
+      `  Hit ≥ ${SOLVE_THRESHOLD} to solve. You get ${MAX_GUESSES} guesses.`,
       "",
     ].join("\n"),
   );
@@ -161,6 +164,36 @@ const emitShareGrid = (puzzle: Puzzle, completed: CompletedPuzzle, color: boolea
   stdout.write(`\n${color ? dim("share:") : "share:"}\n${grid}\n`);
 };
 
+const filterContent = (tokens: readonly string[]): readonly string[] =>
+  tokens.filter((token) => !STOP_WORDS.has(token));
+
+const formatTokenRow = (
+  label: string,
+  marker: string,
+  tokens: readonly string[],
+  colorFn: ((text: string) => string) | null,
+): string | null => {
+  const displayable = filterContent(tokens);
+  if (displayable.length === 0) return null;
+  const shown = displayable.slice(0, DIFF_DISPLAY_CAP);
+  const overflow =
+    displayable.length > DIFF_DISPLAY_CAP
+      ? ` (+${displayable.length - DIFF_DISPLAY_CAP} more)`
+      : "";
+  const text = `  ${marker} ${label.padEnd(7)} ${shown.join(", ")}${overflow}`;
+  return colorFn ? colorFn(text) : text;
+};
+
+const renderDiff = (playerOutput: string, targetOutput: string, color: boolean): void => {
+  const diff = diffOutputs(playerOutput, targetOutput);
+  const sharedLine = formatTokenRow("shared:", "✓", diff.shared, color ? green : null);
+  const missedLine = formatTokenRow("missed:", "+", diff.onlyInTarget, color ? yellow : null);
+  const extraLine = formatTokenRow("extra: ", "−", diff.onlyInPlayer, color ? dim : null);
+  if (sharedLine) stdout.write(`${sharedLine}\n`);
+  if (missedLine) stdout.write(`${missedLine}\n`);
+  if (extraLine) stdout.write(`${extraLine}\n`);
+};
+
 const playSession = async (
   puzzle: Puzzle,
   recordResult: boolean,
@@ -206,6 +239,7 @@ const playSession = async (
           .map((line) => `    ${line}`)
           .join("\n")}\n\n`,
       );
+      renderDiff(result.output, puzzle.output, color);
       stdout.write(`  similarity: ${pct}%  ${bucketLabel}  (${feedback.lengthDelta})\n\n`);
     }
   } finally {
@@ -270,6 +304,23 @@ const finishSession = (
     savePlayState(next, storeRoot ?? undefined);
   }
   return solved ? 0 : 1;
+};
+
+const cmdTutorial = async (color: boolean): Promise<number> => {
+  const intro = [
+    color ? bold("inversion tutorial") : "inversion tutorial",
+    "",
+    "You'll see an LLM output. Your job: write a prompt that would have",
+    "produced it. Your guess is sent to claude (live, BYOK). The output you",
+    "get is compared to the cached one via chrF; ≥ 60% solves it.",
+    "",
+    "The shared/missed/extra rows after each guess tell you which tokens you",
+    "matched, which target tokens you missed, and which you produced extra.",
+    "This round does not count toward your streak.",
+    "",
+  ];
+  stdout.write(`${intro.join("\n")}\n`);
+  return playSession(TUTORIAL_PUZZLE, false, null, color);
 };
 
 const cmdPlay = async (storeRoot: string | null, color: boolean): Promise<number> => {
@@ -399,6 +450,7 @@ const main = async (): Promise<number> => {
     printHelp(color);
     return 0;
   }
+  if (args.command === "tutorial") return cmdTutorial(color);
   if (args.command === "play") return cmdPlay(args.storeRoot, color);
   if (args.command === "practice") return cmdPractice(args.positional, args.storeRoot, color);
   if (args.command === "stats") return cmdStats(args.storeRoot, color);
