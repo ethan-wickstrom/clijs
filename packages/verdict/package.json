@@ -1,23 +1,23 @@
 {
-  "name": "tabletop",
+  "name": "verdict",
   "version": "0.0.1",
-  "description": "AI-driven cybersecurity tabletop exercises for regulated mid-market firms.",
+  "description": "Solo open-source maintainers: triage incoming PRs with structured reasoning. Local-first. Every verdict is a labeled training datum.",
   "keywords": [
+    "ai",
     "cli",
-    "cybersecurity",
-    "incident-response",
-    "mitre-attack",
-    "nist",
-    "tabletop",
-    "training"
+    "code-review",
+    "fine-tuning",
+    "open-source",
+    "pull-requests",
+    "training-data"
   ],
   "license": "MIT",
   "bin": {
-    "tabletop": "./dist/cli.mjs"
+    "verdict": "./dist/cli.mjs"
   },
   "files": [
     "dist",
-    "scenarios",
+    "examples",
     "README.md"
   ],
   "type": "module",

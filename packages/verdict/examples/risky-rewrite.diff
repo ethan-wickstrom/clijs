@@ -1,0 +1,91 @@
+diff --git a/src/cache.ts b/src/cache.ts
+index 1a2b3c4..5d6e7f8 100644
+--- a/src/cache.ts
++++ b/src/cache.ts
+@@ -1,40 +1,80 @@
+-export class Cache<T> {
+-  private store = new Map<string, T>();
+-
+-  get(key: string): T | undefined {
+-    return this.store.get(key);
+-  }
+-
+-  set(key: string, value: T): void {
+-    this.store.set(key, value);
+-  }
+-
+-  has(key: string): boolean {
+-    return this.store.has(key);
+-  }
+-
+-  delete(key: string): boolean {
+-    return this.store.delete(key);
+-  }
+-
+-  clear(): void {
+-    this.store.clear();
+-  }
++import { LRUCache } from "lru-cache";
++import Redis from "ioredis";
++import { z } from "zod";
++
++const ConfigSchema = z.object({
++  ttl: z.number().default(60_000),
++  max: z.number().default(1000),
++  redis: z.string().optional(),
++});
++
++type Config = z.infer<typeof ConfigSchema>;
++
++export class Cache<T> {
++  private memory: LRUCache<string, T>;
++  private redis: Redis | null = null;
++  private config: Config;
++
++  constructor(config: unknown = {}) {
++    this.config = ConfigSchema.parse(config);
++    this.memory = new LRUCache<string, T>({
++      max: this.config.max,
++      ttl: this.config.ttl,
++    });
++    if (this.config.redis) {
++      this.redis = new Redis(this.config.redis);
++    }
++  }
++
++  async get(key: string): Promise<T | undefined> {
++    const local = this.memory.get(key);
++    if (local !== undefined) return local;
++    if (!this.redis) return undefined;
++    const raw = await this.redis.get(key);
++    if (raw === null) return undefined;
++    const parsed = JSON.parse(raw) as T;
++    this.memory.set(key, parsed);
++    return parsed;
++  }
++
++  async set(key: string, value: T): Promise<void> {
++    this.memory.set(key, value);
++    if (this.redis) {
++      await this.redis.set(key, JSON.stringify(value), "PX", this.config.ttl);
++    }
++  }
++
++  async has(key: string): Promise<boolean> {
++    if (this.memory.has(key)) return true;
++    if (!this.redis) return false;
++    return (await this.redis.exists(key)) === 1;
++  }
++
++  async delete(key: string): Promise<boolean> {
++    const local = this.memory.delete(key);
++    if (!this.redis) return local;
++    const remote = await this.redis.del(key);
++    return local || remote > 0;
++  }
++
++  async clear(): Promise<void> {
++    this.memory.clear();
++    if (this.redis) await this.redis.flushdb();
++  }
+ }

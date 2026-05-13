@@ -2,6 +2,7 @@ import { createInterface } from "node:readline";
 
 export interface LineReader {
   next: () => Promise<string | null>;
+  readMultiline: (terminator: string) => Promise<string>;
   close: () => void;
 }
 
@@ -22,12 +23,19 @@ export const createLineReader = (input: NodeJS.ReadableStream): LineReader => {
       waiter?.(null);
     }
   });
-  return {
-    next: () => {
-      if (pending.length > 0) return Promise.resolve(pending.shift() ?? null);
-      if (closed) return Promise.resolve(null);
-      return new Promise<string | null>((resolveCall) => waiters.push(resolveCall));
-    },
-    close: () => rl.close(),
+  const next = (): Promise<string | null> => {
+    if (pending.length > 0) return Promise.resolve(pending.shift() ?? null);
+    if (closed) return Promise.resolve(null);
+    return new Promise<string | null>((resolveCall) => waiters.push(resolveCall));
   };
+  const readMultiline = async (terminator: string): Promise<string> => {
+    const lines: string[] = [];
+    while (true) {
+      const line = await next();
+      if (line === null || line === terminator) break;
+      lines.push(line);
+    }
+    return lines.join("\n");
+  };
+  return { next, readMultiline, close: () => rl.close() };
 };
