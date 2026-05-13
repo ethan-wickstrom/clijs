@@ -1,23 +1,21 @@
 {
-  "name": "verdict",
+  "name": "inversion",
   "version": "0.0.1",
-  "description": "Solo open-source maintainers: triage incoming PRs with structured reasoning. Local-first. Every verdict is a labeled training datum.",
+  "description": "Guess the prompt from the LLM output. A daily Wordle-shaped game where the LLM is the objective function.",
   "keywords": [
-    "ai",
     "cli",
-    "code-review",
-    "fine-tuning",
-    "open-source",
-    "pull-requests",
-    "training-data"
+    "game",
+    "llm",
+    "prompt-engineering",
+    "puzzle",
+    "wordle"
   ],
   "license": "MIT",
   "bin": {
-    "verdict": "./dist/cli.mjs"
+    "inversion": "./dist/cli.mjs"
   },
   "files": [
     "dist",
-    "examples",
     "README.md"
   ],
   "type": "module",
