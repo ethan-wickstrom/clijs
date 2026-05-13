@@ -14,6 +14,7 @@ import type {
 import { appendRecord, ensureStore, findRecord, readAll } from "./store.js";
 import { exportRecords } from "./export.js";
 import type { ExportFormat } from "./export.js";
+import { fetchPullRequest, GitHubFetchError } from "./github-fetch.js";
 import { createLineReader } from "./utils/line-reader.js";
 import type { LineReader } from "./utils/line-reader.js";
 import { bold } from "./utils/bold.js";
@@ -59,6 +60,7 @@ const printHelp = (): void => {
       "Usage:",
       "  verdict init                          create the local store (~/.verdict)",
       "  verdict record [options]              capture one PR triage decision",
+      "  verdict pull <pr-url> [options]       fetch a GitHub PR + capture a triage decision",
       "  verdict list                          list captured verdicts",
       "  verdict show <id>                     show a single verdict",
       "  verdict export [--format <fmt>]       export the dataset for fine-tuning",
@@ -87,6 +89,14 @@ const printHelp = (): void => {
       "                                lines is `12` or `12-15`; sev in {nit,discuss,",
       "                                requested-change,block}; body is the analysis.",
       "  --store <path>               override the store root (default: $HOME)",
+      "",
+      "`pull` fetches the PR's metadata, files, and unified diff from GitHub's",
+      "REST API (no `gh` dependency), and pipes the result into the same record",
+      "flow. The exit-from-flag and interactive-prompt rules match `record`.",
+      "",
+      "`pull` options (in addition to the `record` options above):",
+      "  --token <pat>          GitHub Personal Access Token; otherwise GITHUB_TOKEN env",
+      "                         (raises rate limit from 60/hr to 5,000/hr)",
       "",
       "`export` options:",
       "  --format <fmt>         one of: jsonl (default) | hf | openai",
@@ -417,6 +427,146 @@ const cmdShow = (id: string | undefined, color: boolean, storeRoot: string | nul
   return 0;
 };
 
+interface PullOptions {
+  url: string | null;
+  labels: readonly string[];
+  decision: VerdictDecision | null;
+  reasoning: string | null;
+  storeRoot: string | null;
+  token: string | null;
+  aiAssisted: AiAssistLevel | null;
+  coDevelopedBy: readonly string[];
+  dcoVerified: boolean;
+  comments: readonly ReviewComment[];
+}
+
+const parsePullArgs = (argv: readonly string[]): PullOptions => {
+  const options: PullOptions = {
+    url: null,
+    labels: [],
+    decision: null,
+    reasoning: null,
+    storeRoot: null,
+    token: null,
+    aiAssisted: null,
+    coDevelopedBy: [],
+    dcoVerified: false,
+    comments: [],
+  };
+  const labels: string[] = [];
+  const coDev: string[] = [];
+  const comments: ReviewComment[] = [];
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index]!;
+    if (token === "--label") {
+      const parsed = parseFlagValue(argv, index);
+      if (parsed.value) labels.push(parsed.value);
+      index = parsed.nextIndex;
+    } else if (token === "--decision") {
+      const parsed = parseFlagValue(argv, index);
+      if (parsed.value && isVerdictDecision(parsed.value)) options.decision = parsed.value;
+      index = parsed.nextIndex;
+    } else if (token === "--reasoning") {
+      const parsed = parseFlagValue(argv, index);
+      options.reasoning = parsed.value;
+      index = parsed.nextIndex;
+    } else if (token === "--store") {
+      const parsed = parseFlagValue(argv, index);
+      options.storeRoot = parsed.value;
+      index = parsed.nextIndex;
+    } else if (token === "--token") {
+      const parsed = parseFlagValue(argv, index);
+      options.token = parsed.value;
+      index = parsed.nextIndex;
+    } else if (token === "--ai-assist") {
+      const parsed = parseFlagValue(argv, index);
+      if (parsed.value && isAiAssistLevel(parsed.value)) options.aiAssisted = parsed.value;
+      index = parsed.nextIndex;
+    } else if (token === "--co-dev-by") {
+      const parsed = parseFlagValue(argv, index);
+      if (parsed.value) coDev.push(parsed.value);
+      index = parsed.nextIndex;
+    } else if (token === "--dco-verified") {
+      options.dcoVerified = true;
+    } else if (token === "--comment") {
+      const parsed = parseFlagValue(argv, index);
+      if (parsed.value) {
+        const comment = parseCommentArg(parsed.value);
+        if (comment) comments.push(comment);
+      }
+      index = parsed.nextIndex;
+    } else if (!token.startsWith("--") && !options.url) {
+      options.url = token;
+    }
+  }
+  options.labels = labels;
+  options.coDevelopedBy = coDev;
+  options.comments = comments;
+  return options;
+};
+
+const cmdPull = async (options: PullOptions, color: boolean): Promise<number> => {
+  if (!options.url) {
+    stdout.write("usage: verdict pull <pr-url> [options]\n");
+    return 2;
+  }
+  const token = options.token ?? process.env.GITHUB_TOKEN ?? undefined;
+  let fetched;
+  try {
+    fetched = await fetchPullRequest(options.url, { token });
+  } catch (error) {
+    if (error instanceof GitHubFetchError) {
+      const message = `verdict pull: ${error.details.message}`;
+      stdout.write(`${color ? red(message) : message}\n`);
+      if (error.details.hint) {
+        stdout.write(
+          `${color ? dim(`hint: ${error.details.hint}`) : `hint: ${error.details.hint}`}\n`,
+        );
+      }
+      return 1;
+    }
+    throw error;
+  }
+  stdout.write(
+    `${color ? dim(`fetched ${fetched.context.repo} #${fetched.context.prNumber} (${fetched.state}${fetched.draft ? ", draft" : ""}${fetched.merged ? ", merged" : ""})`) : `fetched ${fetched.context.repo} #${fetched.context.prNumber}`}\n`,
+  );
+  const reader = createLineReader(stdin);
+  let decision = options.decision;
+  let reasoning = options.reasoning ?? null;
+  try {
+    if (!decision) decision = await promptDecision(reader, color);
+    if (reasoning === null) {
+      stdout.write(
+        color
+          ? dim("reasoning (multi-line; end with a single '.' on its own line):\n")
+          : "reasoning (multi-line; end with a single '.' on its own line):\n",
+      );
+      reasoning = await reader.readMultiline(".");
+    }
+  } finally {
+    reader.close();
+  }
+  const record = newRecord({
+    id: shortId(),
+    recordedAt: new Date().toISOString(),
+    context: fetched.context,
+    decision,
+    reasoning: reasoning ?? "",
+    labels: options.labels,
+    comments: options.comments,
+    provenance: {
+      aiAssisted: options.aiAssisted ?? defaultProvenance().aiAssisted,
+      coDevelopedBy: options.coDevelopedBy,
+      dcoVerified: options.dcoVerified,
+    },
+  });
+  appendRecord(record, options.storeRoot ?? undefined);
+  stdout.write(
+    `${color ? bold("recorded") : "recorded"} ${record.id} · ${colorForDecision(decision, color)} · ${fetched.context.filesChanged.length} file${fetched.context.filesChanged.length === 1 ? "" : "s"} · +${fetched.context.additions}/-${fetched.context.deletions} · ${record.comments.length} comment${record.comments.length === 1 ? "" : "s"}\n`,
+  );
+  return 0;
+};
+
 const cmdExport = (options: ExportOptions, color: boolean): number => {
   const records = readAll(options.storeRoot ?? undefined).records;
   const output = exportRecords(records, options.format);
@@ -444,6 +594,7 @@ const main = async (): Promise<number> => {
     return cmdInit(color, storeRoot);
   }
   if (command === "record") return cmdRecord(parseRecordArgs(rest), color);
+  if (command === "pull") return cmdPull(parsePullArgs(rest), color);
   if (command === "list") {
     const storeRoot = rest.includes("--store") ? (rest[rest.indexOf("--store") + 1] ?? null) : null;
     return cmdList(color, storeRoot);

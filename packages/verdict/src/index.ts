@@ -25,3 +25,11 @@ export type { ReadResult } from "./store.js";
 export { exportRecords } from "./export.js";
 export type { ExportFormat, HfDatasetRow, OpenAiChatRow } from "./export.js";
 export { parseCommentArg } from "./utils/parse-comment-arg.js";
+export { parsePrUrl } from "./utils/parse-pr-url.js";
+export type { ParsedPrUrl } from "./utils/parse-pr-url.js";
+export { fetchPullRequest, GitHubFetchError } from "./github-fetch.js";
+export type {
+  FetchOptions,
+  FetchPullRequestResult,
+  GitHubFetchErrorDetails,
+} from "./github-fetch.js";

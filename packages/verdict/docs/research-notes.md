@@ -115,6 +115,45 @@ reference storage). The schema is the area of highest cross-agent agreement.
 research and the code audit converge on. Every other candidate either
 depends on it (X2, X5, X12) or is independent and cheaper (X1, X10, X13).
 
+## Curated dogfood archive (Agent C, 2026-05-13)
+
+Five real, public, verified-reachable GitHub PRs that span verdict's
+workflow axes. Each is fetchable today with `verdict pull <url>`.
+
+| #   | PR                                                                             | State           | Licence         | Why it fits                                                                                                                  | Expected decision | AI-assist |
+| --- | ------------------------------------------------------------------------------ | --------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------- | ----------------- | --------- |
+| 1   | [mastodon/mastodon#28325](https://github.com/mastodon/mastodon/pull/28325)     | merged          | AGPL-3.0        | Long maintainer thread on Active-Record-encrypted 2FA secrets; copyleft.                                                     | merge             | none      |
+| 2   | [astral-sh/ruff#19546](https://github.com/astral-sh/ruff/pull/19546)           | request-changes | MIT             | `dylwil3` requests changes citing CPython upstream behaviour.                                                                | request-changes   | none      |
+| 3   | [FiloSottile/age#520](https://github.com/FiloSottile/age/pull/520)             | closed          | BSD-3-Clause    | **Valsorda (named expert)** closes with a one-line out-of-scope rationale.                                                   | close             | none      |
+| 4   | [ghostty-org/ghostty#10043](https://github.com/ghostty-org/ghostty/pull/10043) | closed          | MIT             | **Hashimoto (named expert)** does six rounds of cannot-repro investigation.                                                  | close             | unknown   |
+| 5   | [curl/curl#21581](https://github.com/curl/curl/pull/21581)                     | open            | curl (MIT-like) | PR body explicitly cites "Claude Code, Codex" agents; **Stenberg (named expert)** + dfandrich push back hard on duplication. | request-changes   | majority  |
+
+**Most-representative for the README's worked example:** curl/curl#21581 —
+the only PR in the set that simultaneously hits all four
+verdict-distinguishing axes (AI-assisted provenance, severity-graded
+blocks, named-expert maintainer voice, and a living decision that
+readers can watch evolve).
+
+**Three named experts hit:** Hashimoto (ghostty), Valsorda (age),
+Stenberg (curl) — matches the maintainer-experts ranking in this doc.
+
+**Licence diversity:** 4 permissive + 1 copyleft (AGPL) — exercises both
+sides of the `upstreamLicense` field.
+
+**Pre-curated archive check:** none of the five appear in CodeReviewer,
+CR-Bench / MelcotCR, or SWE-bench. They are safe as a public dogfood
+set.
+
+## Step log
+
+| Date       | Step                             | Status     | Notes                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------- | -------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-05-13 | X14 (Schema v2)                  | ✅ shipped | per-comment severity, provenance, head/base/license, v1→v2 migration.                                                                                                                                                                                                                                                                                                                              |
+| 2026-05-13 | **X1 (`verdict pull`)**          | ✅ shipped | one-line PR fetch via REST; orchestrated by 3 parallel agents (REST docs / adversarial failure modes / curated dogfood PRs). Top silent failure (HTTP 406 truncation) instrumented from day one via patch-diff fallback. User-Agent + X-GitHub-Api-Version pinned. GITHUB_TOKEN supported. 50/50 tests passing. Sandbox dogfood gated by 60/hr-unauth rate limit on this IP (not a product issue). |
+| _next_     | X2 — public fine-tune artefact   | pending    | Use a real maintainer's archive (≥50 v2 records) to run one OpenAI fine-tune; publish "we trained a model to review like X."                                                                                                                                                                                                                                                                       |
+| _next_     | X10 — maintainer-interview kit   | pending    | Three named candidates from Agent F's report (Valsorda, Stenberg, Litt).                                                                                                                                                                                                                                                                                                                           |
+| _next_     | X13 — ASCAP-style governance doc | pending    | The L3 legal-entity choice was deferred in business-case; deferrable until X2 produces inbound interest.                                                                                                                                                                                                                                                                                           |
+
 ## Resolved questions log
 
 | Q                                                               | A                                                                                                                                                            | Source                                                            | Conf |

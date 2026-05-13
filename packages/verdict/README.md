@@ -98,24 +98,35 @@ verdict --help                        show this message
 ## The most common flow
 
 ```sh
-# stdin (default). All metadata via flags because stdin is occupied by the diff.
-gh pr diff 123 | verdict record \
-  --repo owner/name \
-  --pr 123 \
-  --title "Fix race in cache.ts" \
-  --author drive-by-contributor \
-  --head abc123 \
-  --base def456 \
-  --license Apache-2.0 \
+# v2.1: one-line pull from a GitHub PR URL — no `gh` dependency.
+# title / author / head SHA / base SHA / upstream licence are all auto-populated.
+verdict pull https://github.com/owner/repo/pull/123 \
   --decision request-changes \
   --ai-assist majority \
   --comment "src/cache.ts:12-15:block:Lock released before consistent read finishes." \
   --comment "src/cache.ts:30:nit:Rename c to cache for clarity." \
-  --reasoning "The fix is correct but the test only covers the happy path."
+  --reasoning "The fix is correct but the test only covers the happy path." \
+  --label tests-needed
+
+# pipe-from-gh form (works if you have the `gh` CLI). All metadata via flags
+# because stdin is occupied by the diff.
+gh pr diff 123 | verdict record \
+  --repo owner/name --pr 123 \
+  --title "Fix race in cache.ts" \
+  --decision merge \
+  --reasoning "Covered by the new integration test."
 
 # file mode. stdin is free for the interactive prompts.
 verdict record --diff /tmp/pr-123.diff --title "Fix race"
 ```
+
+## Rate limits
+
+`verdict pull` uses the GitHub REST API. Unauthenticated calls are capped at
+60/hr per IP — enough for the natural maintainer flow (a handful of PRs a day),
+but easy to exhaust on a shared sandbox or CI runner. Set `GITHUB_TOKEN` (or
+pass `--token <pat>`) to raise the cap to 5,000/hr. The CLI surfaces the
+relevant rate-limit hint in the error message when it happens.
 
 ## Data shape
 
