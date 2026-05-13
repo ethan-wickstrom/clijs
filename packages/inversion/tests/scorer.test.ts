@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vite-plus/test";
-import { describe as describeOutput, jaccardSimilarity, tokenize } from "../src/scorer.js";
+import {
+  blendedSimilarity,
+  charNgramSimilarity,
+  describe as describeOutput,
+  jaccardSimilarity,
+  tokenize,
+} from "../src/scorer.js";
 
 describe("tokenize", () => {
   it("returns no tokens for empty / whitespace-only", () => {
@@ -54,6 +60,58 @@ describe("jaccardSimilarity", () => {
   });
 });
 
+describe("charNgramSimilarity", () => {
+  it("returns 1 for identical text", () => {
+    expect(charNgramSimilarity("hello world", "hello world")).toBe(1);
+  });
+
+  it("returns 1 for both empty", () => {
+    expect(charNgramSimilarity("", "")).toBe(1);
+  });
+
+  it("returns 0 when one side is empty", () => {
+    expect(charNgramSimilarity("", "hello")).toBe(0);
+    expect(charNgramSimilarity("hello", "")).toBe(0);
+  });
+
+  it("is symmetric", () => {
+    const a = "a quick brown fox";
+    const b = "the brown fox jumps";
+    expect(charNgramSimilarity(a, b)).toBe(charNgramSimilarity(b, a));
+  });
+
+  it("scores inflectional variants high (steams ≈ steam)", () => {
+    expect(charNgramSimilarity("the coffee steams", "the coffee steam")).toBeGreaterThan(0.7);
+  });
+
+  it("scores unrelated text low", () => {
+    expect(charNgramSimilarity("zebra crossing", "punctuation marks")).toBeLessThan(0.3);
+  });
+
+  it("ignores case + punctuation (same normalization as tokens)", () => {
+    expect(charNgramSimilarity("Coffee, steam.", "coffee steam")).toBe(1);
+  });
+});
+
+describe("blendedSimilarity", () => {
+  it("returns 1 for identical text", () => {
+    expect(blendedSimilarity("hello world", "hello world")).toBe(1);
+  });
+
+  it("returns 0 for fully disjoint vocabulary AND surface form", () => {
+    expect(blendedSimilarity("zzzzz", "qqqqq")).toBe(0);
+  });
+
+  it("scores thematic-but-lexically-divergent prose noticeably higher than pure Jaccard would", () => {
+    const a = "Sleep past the alarm,\nCoffee steams in golden light—\nNowhere else to be.";
+    const b = "Sunlight finds the cup,\nsteam curls through unhurried air—\nnowhere yet to be.";
+    const jaccard = jaccardSimilarity(a, b);
+    const blended = blendedSimilarity(a, b);
+    expect(blended).toBeGreaterThan(jaccard);
+    expect(blended).toBeGreaterThan(0.25);
+  });
+});
+
 describe("describe", () => {
   it("buckets a perfect match as convergent", () => {
     const feedback = describeOutput("hello world", "hello world");
@@ -62,8 +120,8 @@ describe("describe", () => {
     expect(feedback.lengthDelta).toBe("match");
   });
 
-  it("buckets a complete miss as cold", () => {
-    const feedback = describeOutput("alpha beta gamma", "delta epsilon zeta");
+  it("buckets fully disjoint surface form as cold", () => {
+    const feedback = describeOutput("zzzzz aaaaa", "qqqqq bbbbb");
     expect(feedback.bucket).toBe("cold");
   });
 

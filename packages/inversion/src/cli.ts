@@ -11,13 +11,17 @@ import {
   startSession,
 } from "./play.js";
 import type { Guess, Puzzle, PuzzleSession } from "./play.js";
-
 import { describe } from "./scorer.js";
 import { runClaude, RunnerError } from "./runner.js";
 import { loadPlayState, savePlayState } from "./store.js";
-import { PUZZLES, findPuzzle } from "./puzzles.js";
+import {
+  UserPuzzleCollisionError,
+  findPuzzle,
+  loadAllPuzzles,
+  slugify,
+  writeUserPuzzle,
+} from "./puzzles.js";
 import { createLineReader } from "./utils/line-reader.js";
-import type { LineReader } from "./utils/line-reader.js";
 import { bold } from "./utils/bold.js";
 import { dim } from "./utils/dim.js";
 import { green } from "./utils/green.js";
@@ -26,32 +30,41 @@ import { yellow } from "./utils/yellow.js";
 import { cyan } from "./utils/cyan.js";
 import { supportsColor } from "./utils/supports-color.js";
 
+type Command = "play" | "practice" | "stats" | "list" | "seed" | "help";
+
 interface ParsedArgs {
-  command: "play" | "practice" | "stats" | "list" | "help";
-  puzzleId: string | null;
+  command: Command;
+  positional: string | null;
   storeRoot: string | null;
-  command_arg: string | null;
+  seedPrompt: string | null;
+  seedId: string | null;
+  seedModel: string | null;
 }
 
 const parseArgs = (argv: readonly string[]): ParsedArgs => {
   const args: ParsedArgs = {
     command: "help",
-    puzzleId: null,
+    positional: null,
     storeRoot: null,
-    command_arg: null,
+    seedPrompt: null,
+    seedId: null,
+    seedModel: null,
   };
   if (argv.length === 0 || argv.includes("--help") || argv.includes("-h")) return args;
   const [first, ...rest] = argv;
   if (first === "play") args.command = "play";
   else if (first === "practice") {
     args.command = "practice";
-    args.command_arg = rest[0] ?? null;
+    args.positional = rest[0] ?? null;
   } else if (first === "stats") args.command = "stats";
   else if (first === "list") args.command = "list";
+  else if (first === "seed") args.command = "seed";
   for (let index = 0; index < rest.length; index++) {
     const token = rest[index]!;
     if (token === "--store") args.storeRoot = rest[++index] ?? null;
-    else if (token === "--puzzle") args.puzzleId = rest[++index] ?? null;
+    else if (token === "--prompt") args.seedPrompt = rest[++index] ?? null;
+    else if (token === "--id") args.seedId = rest[++index] ?? null;
+    else if (token === "--model") args.seedModel = rest[++index] ?? null;
   }
   return args;
 };
@@ -67,18 +80,26 @@ const printHelp = (color: boolean): void => {
       "  inversion play              play today's puzzle",
       "  inversion practice <id>     play a past puzzle (does not affect streak)",
       "  inversion stats             show your streak and history",
-      "  inversion list              list all bundled puzzles",
+      "  inversion list              list all bundled + user-seeded puzzles",
+      "  inversion seed --prompt <p> generate a new puzzle by calling claude and",
+      "                                save it as a user puzzle for later play",
       "  inversion --help            show this message",
       "",
+      "`seed` options:",
+      "  --prompt <text>             required; the hidden prompt to be guessed",
+      "  --id <kebab-case-id>        optional; defaults to a slug of the prompt",
+      "  --model <claude-model>      optional; defaults to sonnet",
+      "  --store <path>              override the store root (default: $HOME)",
+      "",
       "Requirements:",
-      "  - `claude` CLI installed; your guess is run against the same model the",
-      "    puzzle was originally produced with. You pay Anthropic for your guess",
-      "    tokens (~$0.005 per round).",
+      "  - `claude` CLI installed; your guess (and any seed call) is run against",
+      "    the same model the puzzle was originally produced with. You pay",
+      "    Anthropic for your guess tokens (~$0.005 per round).",
       "",
       "How scoring works:",
       `  Each guess: your prompt is run live against claude. The output is`,
-      `  compared to the original output via Jaccard token similarity. Hit`,
-      `  ≥ ${SOLVE_THRESHOLD} to solve. You get ${MAX_GUESSES} guesses.`,
+      `  compared to the original output via a blended Jaccard-token + char-ngram`,
+      `  cosine metric. Hit ≥ ${SOLVE_THRESHOLD} to solve. You get ${MAX_GUESSES} guesses.`,
       "",
     ].join("\n"),
   );
@@ -151,7 +172,7 @@ const playSession = async (
       stdout.write(
         `${color ? dim(`guess ${session.guesses.length + 1}/${MAX_GUESSES} — your prompt (single line, blank line submits):`) : `guess ${session.guesses.length + 1}/${MAX_GUESSES} — your prompt (single line, blank line submits):`}\n`,
       );
-      const guessText = await readPrompt(reader);
+      const guessText = await reader.next();
       if (guessText === null) {
         stdout.write(color ? dim("\n(input ended; exiting)\n") : "\n(input ended; exiting)\n");
         break;
@@ -161,7 +182,7 @@ const playSession = async (
         continue;
       }
       stdout.write(color ? dim("calling claude…\n") : "calling claude…\n");
-      const result = await runGuessOrFail(guessText);
+      const result = await runGuessOrFail(guessText, puzzle.model);
       if (result === null) return 1;
       const feedback = describe(result.output, puzzle.output);
       const guess: Guess = {
@@ -186,17 +207,12 @@ const playSession = async (
   return finishSession(puzzle, session, recordResult, storeRoot, color);
 };
 
-const readPrompt = async (reader: LineReader): Promise<string | null> => {
-  const first = await reader.next();
-  if (first === null) return null;
-  return first;
-};
-
-const runGuessOrFail = async (prompt: string): Promise<{ output: string } | null> => {
+const runGuessOrFail = async (
+  prompt: string,
+  model: string,
+): Promise<{ output: string } | null> => {
   try {
-    const { output } = await runClaude(prompt, {
-      model: "sonnet",
-    });
+    const { output } = await runClaude(prompt, { model: shortModelName(model) });
     return { output };
   } catch (error) {
     if (error instanceof RunnerError) {
@@ -206,6 +222,11 @@ const runGuessOrFail = async (prompt: string): Promise<{ output: string } | null
     }
     throw error;
   }
+};
+
+const shortModelName = (full: string): string => {
+  if (full.startsWith("claude-")) return full.slice("claude-".length);
+  return full;
 };
 
 const finishSession = (
@@ -236,15 +257,13 @@ const finishSession = (
 };
 
 const cmdPlay = async (storeRoot: string | null, color: boolean): Promise<number> => {
-  if (PUZZLES.length === 0) {
-    stdout.write("inversion: no puzzles bundled.\n");
+  const load = loadAllPuzzles(storeRoot ?? undefined);
+  if (load.puzzles.length === 0) {
+    stdout.write("inversion: no puzzles available.\n");
     return 1;
   }
-  const pick = dailyPick(PUZZLES);
-  if (!pick) {
-    stdout.write("inversion: no puzzle for today.\n");
-    return 1;
-  }
+  const pick = dailyPick(load.puzzles);
+  if (!pick) return 1;
   const state = loadPlayState(storeRoot ?? undefined);
   if (hasCompleted(state, pick.puzzle.id)) {
     return handleAlreadyCompleted(pick.puzzle, storeRoot, color);
@@ -261,7 +280,7 @@ const cmdPractice = async (
     stdout.write("usage: inversion practice <puzzle-id>\n");
     return 2;
   }
-  const puzzle = findPuzzle(puzzleId);
+  const puzzle = findPuzzle(puzzleId, storeRoot ?? undefined);
   if (!puzzle) {
     stdout.write(`inversion: no puzzle with id "${puzzleId}". try \`inversion list\`.\n`);
     return 1;
@@ -284,13 +303,77 @@ const cmdStats = (storeRoot: string | null, color: boolean): number => {
   return 0;
 };
 
-const cmdList = (color: boolean): number => {
-  const header = color ? bold("bundled puzzles") : "bundled puzzles";
+const cmdList = (storeRoot: string | null, color: boolean): number => {
+  const load = loadAllPuzzles(storeRoot ?? undefined);
+  const header = color ? bold("puzzles") : "puzzles";
   stdout.write(`${header}\n`);
-  for (const puzzle of PUZZLES) {
-    stdout.write(`  ${puzzle.id.padEnd(24)} ${puzzle.isoDate}  ${puzzle.model}\n`);
+  for (const puzzle of load.puzzles) {
+    const isBundled = load.puzzles.indexOf(puzzle) < load.bundledCount;
+    const tag = isBundled ? "bundled" : "user";
+    const tagged = color ? dim(`[${tag}]`) : `[${tag}]`;
+    stdout.write(`  ${puzzle.id.padEnd(28)} ${tagged}  ${puzzle.isoDate}  ${puzzle.model}\n`);
+  }
+  if (load.rejectedIds.length > 0) {
+    const message = `rejected user puzzles (collide with bundled ids): ${load.rejectedIds.join(", ")}`;
+    stdout.write(`${color ? red(message) : message}\n`);
   }
   return 0;
+};
+
+const cmdSeed = async (
+  prompt: string | null,
+  customId: string | null,
+  model: string | null,
+  storeRoot: string | null,
+  color: boolean,
+): Promise<number> => {
+  if (!prompt) {
+    stdout.write('usage: inversion seed --prompt "<text>" [--id <id>] [--model <name>]\n');
+    return 2;
+  }
+  const targetId = customId ?? slugify(prompt);
+  const targetModel = model ?? "sonnet";
+  stdout.write(
+    color
+      ? dim(`generating with claude (${targetModel})…\n`)
+      : `generating with claude (${targetModel})…\n`,
+  );
+  let output: string;
+  try {
+    const result = await runClaude(prompt, { model: targetModel });
+    output = result.output;
+  } catch (error) {
+    if (error instanceof RunnerError) {
+      stdout.write(
+        `${color ? red(`claude failed: ${error.message}`) : `claude failed: ${error.message}`}\n`,
+      );
+      if (error.stderr.trim().length > 0)
+        stdout.write(`${color ? dim(error.stderr.trim()) : error.stderr.trim()}\n`);
+      return 1;
+    }
+    throw error;
+  }
+  try {
+    const puzzle = writeUserPuzzle(
+      { id: targetId, prompt, output, model: `claude-${targetModel}` },
+      storeRoot ?? undefined,
+    );
+    stdout.write(`${color ? bold("seeded") : "seeded"} ${puzzle.id} (${puzzle.isoDate})\n`);
+    stdout.write(`${color ? dim("preview:") : "preview:"}\n`);
+    const preview = puzzle.output
+      .split("\n")
+      .slice(0, 4)
+      .map((line) => `  ${line}`)
+      .join("\n");
+    stdout.write(`${color ? cyan(preview) : preview}\n`);
+    return 0;
+  } catch (error) {
+    if (error instanceof UserPuzzleCollisionError) {
+      stdout.write(`${color ? red(error.message) : error.message}\n`);
+      return 2;
+    }
+    throw error;
+  }
 };
 
 const main = async (): Promise<number> => {
@@ -301,9 +384,11 @@ const main = async (): Promise<number> => {
     return 0;
   }
   if (args.command === "play") return cmdPlay(args.storeRoot, color);
-  if (args.command === "practice") return cmdPractice(args.command_arg, args.storeRoot, color);
+  if (args.command === "practice") return cmdPractice(args.positional, args.storeRoot, color);
   if (args.command === "stats") return cmdStats(args.storeRoot, color);
-  if (args.command === "list") return cmdList(color);
+  if (args.command === "list") return cmdList(args.storeRoot, color);
+  if (args.command === "seed")
+    return cmdSeed(args.seedPrompt, args.seedId, args.seedModel, args.storeRoot, color);
   printHelp(color);
   return 2;
 };
