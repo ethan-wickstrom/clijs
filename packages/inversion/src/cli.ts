@@ -1,7 +1,13 @@
 #!/usr/bin/env node
 
 import { stdin, stdout } from "node:process";
-import { DIFF_DISPLAY_CAP, MAX_GUESSES, SOLVE_THRESHOLD, STOP_WORDS } from "./constants.js";
+import {
+  DIFF_DISPLAY_CAP,
+  MAX_GUESSES,
+  REVEAL_COMMAND,
+  SOLVE_THRESHOLD,
+  STOP_WORDS,
+} from "./constants.js";
 import {
   completeSession,
   dailyPick,
@@ -104,6 +110,7 @@ const printHelp = (color: boolean): void => {
       `  Each guess: your prompt is run live against claude. The output is`,
       `  compared to the original output via chrF (Popović 2015) with β=2.`,
       `  Hit ≥ ${SOLVE_THRESHOLD} to solve. You get ${MAX_GUESSES} guesses.`,
+      `  Type :reveal instead of a guess to give up and see the answer early.`,
       "",
     ].join("\n"),
   );
@@ -207,14 +214,19 @@ const playSession = async (
   );
   const reader = createLineReader(stdin);
   let session = startSession(puzzle);
+  let revealedEarly = false;
   try {
     while (session.status === "in-progress") {
       stdout.write(
-        `${color ? dim(`guess ${session.guesses.length + 1}/${MAX_GUESSES} — your prompt (single line, blank line submits):`) : `guess ${session.guesses.length + 1}/${MAX_GUESSES} — your prompt (single line, blank line submits):`}\n`,
+        `${color ? dim(`guess ${session.guesses.length + 1}/${MAX_GUESSES} — your prompt  (:reveal to give up):`) : `guess ${session.guesses.length + 1}/${MAX_GUESSES} — your prompt  (:reveal to give up):`}\n`,
       );
       const guessText = await reader.next();
       if (guessText === null) {
         stdout.write(color ? dim("\n(input ended; exiting)\n") : "\n(input ended; exiting)\n");
+        break;
+      }
+      if (guessText.trim() === REVEAL_COMMAND) {
+        revealedEarly = true;
         break;
       }
       if (guessText.trim().length === 0) {
@@ -245,7 +257,7 @@ const playSession = async (
   } finally {
     reader.close();
   }
-  return finishSession(puzzle, session, recordResult, storeRoot, color);
+  return finishSession(puzzle, session, recordResult, storeRoot, color, revealedEarly);
 };
 
 const runGuessOrFail = async (
@@ -276,15 +288,22 @@ const finishSession = (
   recordResult: boolean,
   storeRoot: string | null,
   color: boolean,
+  revealedEarly: boolean = false,
 ): number => {
   const solved = session.status === "solved";
+  const guessCount = session.guesses.length;
+  const headlineText = solved
+    ? `solved in ${guessCount}/${MAX_GUESSES}`
+    : revealedEarly
+      ? `revealed (${guessCount}/${MAX_GUESSES} guesses used)`
+      : `out of guesses (${guessCount}/${MAX_GUESSES})`;
   const headline = solved
     ? color
-      ? green(`solved in ${session.guesses.length}/${MAX_GUESSES}`)
-      : `solved in ${session.guesses.length}/${MAX_GUESSES}`
+      ? green(headlineText)
+      : headlineText
     : color
-      ? red(`out of guesses (${session.guesses.length}/${MAX_GUESSES})`)
-      : `out of guesses (${session.guesses.length}/${MAX_GUESSES})`;
+      ? red(headlineText)
+      : headlineText;
   stdout.write(`${headline}\n`);
   stdout.write(
     `${color ? dim("the original prompt was:") : "the original prompt was:"} ${puzzle.prompt}\n`,
@@ -295,7 +314,7 @@ const finishSession = (
     completedAtIso: new Date().toISOString(),
     guesses: session.guesses,
     solved,
-    guessCount: session.guesses.length,
+    guessCount,
   };
   emitShareGrid(puzzle, completed, color);
   if (recordResult) {
@@ -316,6 +335,7 @@ const cmdTutorial = async (color: boolean): Promise<number> => {
     "",
     "The shared/missed/extra rows after each guess tell you which tokens you",
     "matched, which target tokens you missed, and which you produced extra.",
+    "Type :reveal at any time to give up and see the answer early.",
     "This round does not count toward your streak.",
     "",
   ];

@@ -73,3 +73,4 @@ export const STOP_WORDS: ReadonlySet<string> = new Set([
 ]);
 
 export const DIFF_DISPLAY_CAP = 10;
+export const REVEAL_COMMAND = ":reveal";
