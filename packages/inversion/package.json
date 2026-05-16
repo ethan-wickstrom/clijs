@@ -1,0 +1,42 @@
+{
+  "name": "inversion",
+  "version": "0.0.1",
+  "description": "Guess the prompt from the LLM output. A daily Wordle-shaped game where the LLM is the objective function.",
+  "keywords": [
+    "cli",
+    "game",
+    "llm",
+    "prompt-engineering",
+    "puzzle",
+    "wordle"
+  ],
+  "license": "MIT",
+  "bin": {
+    "inversion": "./dist/cli.mjs"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "dev": "vp pack --watch",
+    "test": "vp test run",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
